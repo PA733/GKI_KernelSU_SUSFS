@@ -389,6 +389,10 @@ jobs:
             echo "CONFIG_ZRAM_WRITEBACK=y" >> "$CONFIG_FILE"
           fi
 
+          echo "CONFIG_KERNEL_LZ4=y" >> "$CONFIG_FILE"
+          echo "CONFIG_KERNEL_LZ4_COMPRESS=y" >> "$CONFIG_FILE"
+          grep -E "^CONFIG_KERNEL_LZ4=" "$CONFIG_FILE"
+
       - name: 设置BBR为默认拥塞算法
         if: ${{ inputs.set_defbbr }}
         run: |
