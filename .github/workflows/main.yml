@@ -635,7 +635,7 @@ jobs:
           <pre>${INPUT_CHANGE_LOG}
           </pre>
           
-          Download: <a href="https://t.me/ReSukiSUKernelBuilds">View In Channel</a>
+          Download: <a href="https://github.com/ReSukiSU-GKI/GKI_KernelSU_SUSFS/releases/tag/${NEW_TAG}">Click Here</a>
 
           Note: The "commit" here refers to ReSukiSU's commit, not this repository's.
           EOF
@@ -677,7 +677,7 @@ jobs:
           <pre>${INPUT_CHANGE_LOG}
           </pre>
           
-          Download: <a href="https://t.me/ReSukiSUKernelBuilds">View In Channel</a>
+          Download: <a href="https://github.com/ReSukiSU-GKI/GKI_KernelSU_SUSFS/releases/tag/${NEW_TAG}">Click Here</a>
 
           Note: The "commit" here refers to ReSukiSU's commit, not this repository's.
           EOF
