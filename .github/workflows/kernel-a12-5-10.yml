@@ -111,83 +111,40 @@ on:
         default: false
 
 jobs:
-  build-kernels-a12-5-10:
-    name: "5.10.${{ matrix.sub_level }}-${{ matrix.os_patch_level }}"
+  prepare-matrix:
+    runs-on: ubuntu-latest
+    outputs:
+      matrix: ${{ steps.set-matrix.outputs.matrix }}
+    steps:
+      - name: 检出代码
+        uses: actions/checkout@v6
+
+      - name: 从 JSON 文件准备构建矩阵
+        id: set-matrix
+        run: |
+          JSON_FILE="data/android12/5.10.json"
+          if [ ! -f "$JSON_FILE" ]; then
+            echo "::error::矩阵定义文件未找到: $JSON_FILE"
+            exit 1
+          fi
+          # 读取、验证并输出 JSON 内容为单行
+          MATRIX_JSON=$(cat "$JSON_FILE" | jq -c '.')
+          echo "matrix=$MATRIX_JSON" >> $GITHUB_OUTPUT
+          echo "准备好的矩阵:"
+          echo "$MATRIX_JSON"
+
+  build:
+    name: "Build ${{ matrix.kernel_version }}.${{ matrix.sub_level }}-${{ matrix.os_patch_level }}"
+    needs: prepare-matrix
     strategy:
       fail-fast: false
       matrix:
-        include:
-          - sub_level: "66"
-            os_patch_level: "2022-01"
-            revision: "r11"
-          - sub_level: "81"
-            os_patch_level: "2022-03"
-            revision: "r11"
-          - sub_level: "101"
-            os_patch_level: "2022-04"
-            revision: "r28"
-          - sub_level: "110"
-            os_patch_level: "2022-07"
-            revision: "r1"
-          - sub_level: "117"
-            os_patch_level: "2022-09"
-            revision: "r1"
-          - sub_level: "136"
-            os_patch_level: "2022-11"
-            revision: "r15"
-          - sub_level: "149"
-            os_patch_level: "2023-01"
-            revision: "r1"
-          - sub_level: "160"
-            os_patch_level: "2023-03"
-            revision: "r1"
-          - sub_level: "168"
-            os_patch_level: "2023-04"
-            revision: "r9"
-          - sub_level: "177"
-            os_patch_level: "2023-07"
-            revision: "r3"
-          - sub_level: "185"
-            os_patch_level: "2023-09"
-            revision: "r1"
-          - sub_level: "198"
-            os_patch_level: "2024-01"
-            revision: "r17"
-          - sub_level: "205"
-            os_patch_level: "2024-03"
-            revision: "r1"
-          - sub_level: "209"
-            os_patch_level: "2024-05"
-            revision: "r13"
-          - sub_level: "218"
-            os_patch_level: "2024-08"
-            revision: "r14"
-          - sub_level: "226"
-            os_patch_level: "2024-11"
-            revision: "r8"
-          - sub_level: "233"
-            os_patch_level: "2025-02"
-            revision: "r1"
-          - sub_level: "236"
-            os_patch_level: "2025-05"
-            revision: "r1"
-          - sub_level: "237"
-            os_patch_level: "2025-06"
-            revision: "r1"
-          - sub_level: "240"
-            os_patch_level: "2025-09"
-            revision: "r1"
-          - sub_level: "246"
-            os_patch_level: "2025-12"
-            revision: "r1"
-          - sub_level: "X"
-            os_patch_level: "lts"
-            revision: "r1"
+        include: ${{ fromJson(needs.prepare-matrix.outputs.matrix) }}
     uses: ./.github/workflows/build.yml
     secrets: inherit
     with:
-      android_version: "android12"
-      kernel_version: "5.10"
+      android_version: ${{ matrix.android_version }}
+      kernel_version: ${{ matrix.kernel_version }}
       sub_level: ${{ matrix.sub_level }}
       os_patch_level: ${{ matrix.os_patch_level }}
       revision: ${{ matrix.revision }}
