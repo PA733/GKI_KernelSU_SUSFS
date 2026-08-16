@@ -127,8 +127,19 @@ jobs:
             echo "::error::矩阵定义文件未找到: $JSON_FILE"
             exit 1
           fi
-          # 读取、验证并输出 JSON 内容为单行
-          MATRIX_JSON=$(cat "$JSON_FILE" | jq -c '.')
+          # 从 JSON 对象中解析 'entries' 数组，并将其转换为构建矩阵所需的格式
+          # . as $root 保存根对象, .entries 遍历条目, map(...) 对每个条目进行转换
+          # sub_level 从 "5.10.xxx" 中提取 "xxx"
+          MATRIX_JSON=$(jq -c '
+            . as $root | .entries | map(
+              {
+                "android_version": $root.android_version,
+                "kernel_version": $root.kernel_version,
+                "os_patch_level": .date,
+                "sub_level": (.kernel | split(".")[2]),
+                "revision": .revision
+              }
+            )' "$JSON_FILE")
           echo "matrix=$MATRIX_JSON" >> $GITHUB_OUTPUT
           echo "准备好的矩阵:"
           echo "$MATRIX_JSON"
