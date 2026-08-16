@@ -1,10 +1,8 @@
-"""增量更新 GKI 内核版本数据。
-
-读取现有 JSON 数据，仅抓取缺失的月份，同时更新 LTS 版本。
-"""
+"""增量更新 GKI 内核版本数据。"""
 
 import json
 import os
+import sys
 import time
 
 from gki_fetch import (
@@ -17,10 +15,11 @@ from gki_fetch import (
 def update_target(android_ver: str, kernel_ver: str,
                   date_start: str, date_end: str | None,
                   dep_cutoff: str) -> bool:
-    """增量更新单个目标，返回是否有数据变更"""
     path = json_path(android_ver, kernel_ver)
     end = get_end_date(date_end)
     changed = False
+
+    is_k510 = (kernel_ver == "5.10")
 
     # 读取现有数据
     if os.path.exists(path):
@@ -31,14 +30,14 @@ def update_target(android_ver: str, kernel_ver: str,
         data = {
             "android_version": android_ver,
             "kernel_version": kernel_ver,
-            "lts": None,
             "entries": [],
         }
+        if not is_k510:
+            data["lts"] = None
         entries = []
 
-    # 确定需要抓取的日期范围
-    # 从 date_start 开始扫描，过滤掉已有日期，可自动填补之前遗漏的月份
-    existing_dates = {e["date"] for e in entries}
+    # 建立已有日期索引，避免覆写
+    existing_dates = {e.get("date") for e in entries if isinstance(e, dict)}
     all_dates = make_date_range(date_start, end)
     new_dates = [d for d in all_dates if d not in existing_dates]
 
@@ -62,13 +61,19 @@ def update_target(android_ver: str, kernel_ver: str,
 
             version, patchlevel, sublevel = ver
             detail = f"{version}.{patchlevel}.{sublevel}"
-            entries.append({"date": date, "kernel": detail})
+
+            # 仅 5.10 写入 revision
+            new_entry = {"date": date, "kernel": detail}
+            if is_k510:
+                new_entry["revision"] = "r1"
+
+            entries.append(new_entry)
             changed = True
             print(f"-> {detail}")
             time.sleep(0.3)
 
-    # 按日期排序
-    entries.sort(key=lambda e: e["date"])
+    # 排序：将具体日期按字母排序，'lts' 置于末尾
+    entries.sort(key=lambda e: (e.get("date") == "lts", e.get("date", "")))
 
     # 更新 LTS
     lts_label = f"{android_ver}-{kernel_ver}-lts"
@@ -83,15 +88,31 @@ def update_target(android_ver: str, kernel_ver: str,
         else:
             version, patchlevel, sublevel = ver
             lts_value = f"{version}.{patchlevel}.{sublevel}"
-            old_lts = data.get("lts")
-            if old_lts != lts_value:
-                changed = True
-                print(f"-> {lts_value} (was {old_lts})")
-            else:
-                print(f"-> {lts_value} (unchanged)")
-            data["lts"] = lts_value
 
-    # 保存
+            if is_k510:
+                # 5.10 的 LTS 存在于 entries 内
+                lts_entry = next((e for e in entries if e.get("date") == "lts"), None)
+                if lts_entry:
+                    if lts_entry.get("kernel") != lts_value:
+                        lts_entry["kernel"] = lts_value
+                        changed = True
+                        print(f"-> {lts_value} (updated entries.lts)")
+                    else:
+                        print(f"-> {lts_value} (unchanged)")
+                else:
+                    entries.append({"date": "lts", "kernel": lts_value, "revision": "r1"})
+                    changed = True
+                    print(f"-> {lts_value} (added to entries)")
+            else:
+                # 其他版本使用根节点 lts
+                old_lts = data.get("lts")
+                if old_lts != lts_value:
+                    data["lts"] = lts_value
+                    changed = True
+                    print(f"-> {lts_value} (was {old_lts})")
+                else:
+                    print(f"-> {lts_value} (unchanged)")
+
     data["entries"] = entries
     if changed:
         os.makedirs(os.path.dirname(path), exist_ok=True)
@@ -116,11 +137,9 @@ def main():
 
 
 if __name__ == "__main__":
-    import sys
     try:
         changed = main()
     except Exception as e:
         print(f"\nFATAL: {e}", file=sys.stderr)
         sys.exit(1)
-    # Exit 0 = data changed, 2 = no changes (both are success)
     sys.exit(0 if changed else 2)

@@ -30,15 +30,33 @@ def update_lts():
 
         version, patchlevel, sublevel = ver
         lts_value = f"{version}.{patchlevel}.{sublevel}"
-        old_lts = data.get("lts")
-        if old_lts == lts_value:
-            print(f"-> {lts_value} (unchanged)")
-            continue
+        changed = False
 
-        data["lts"] = lts_value
-        with open(path, "w", encoding="utf-8") as f:
-            json.dump(data, f, indent=2, ensure_ascii=False)
-        print(f"-> {lts_value} (was {old_lts})")
+        if kernel_ver == "5.10":
+            lts_entry = next((e for e in data.get("entries", []) if e.get("date") == "lts"), None)
+            if lts_entry:
+                if lts_entry.get("kernel") != lts_value:
+                    lts_entry["kernel"] = lts_value
+                    changed = True
+                    print(f"-> {lts_value} (updated entry)")
+                else:
+                    print(f"-> {lts_value} (unchanged)")
+            else:
+                data.setdefault("entries", []).append({"date": "lts", "kernel": lts_value, "revision": "r1"})
+                changed = True
+                print(f"-> {lts_value} (added entry)")
+        else:
+            old_lts = data.get("lts")
+            if old_lts == lts_value:
+                print(f"-> {lts_value} (unchanged)")
+                continue
+            data["lts"] = lts_value
+            changed = True
+            print(f"-> {lts_value} (was {old_lts})")
+
+        if changed:
+            with open(path, "w", encoding="utf-8") as f:
+                json.dump(data, f, indent=2, ensure_ascii=False)
 
     print("\nDone.")
 
