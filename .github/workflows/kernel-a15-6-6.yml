@@ -17,6 +17,11 @@ on:
         required: false
         type: string
         default: ""
+      clean_build:
+        description: "清洁构建 (禁用所有附加功能)"
+        required: false
+        type: boolean
+        default: false
       version:
         description: "自定义版本名 (可选)"
         required: false
