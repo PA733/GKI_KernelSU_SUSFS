@@ -73,6 +73,10 @@ on:
         default: false
   workflow_call:
     inputs:
+      clean_build:
+        required: false
+        type: boolean
+        default: false
       # KernelSU 变体固定为 ReSukiSU
       kernelsu_branch:
         required: true
@@ -152,6 +156,7 @@ jobs:
     uses: ./.github/workflows/build.yml
     secrets: inherit
     with:
+      clean_build: ${{ inputs.clean_build }}
       android_version: "android15"
       kernel_version: "6.6"
       sub_level: ${{ matrix.sub_level }}

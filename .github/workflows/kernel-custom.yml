@@ -70,6 +70,11 @@ on:
         default: "Sun Dec 01 08:10:00 UTC 2024"
 
       # ==================== 功能开关 ====================
+      clean_build:
+        description: "清洁构建 (禁用所有附加功能)"
+        type: boolean
+        default: false
+
       use_zram:
         description: "启用 ZRAM 增强算法"
         required: true
@@ -122,6 +127,7 @@ jobs:
     uses: ./.github/workflows/build.yml
     secrets: inherit
     with:
+      clean_build: ${{ inputs.clean_build }}
       android_version: ${{ inputs.android_version }}
       kernel_version: ${{ inputs.kernel_version }}
       sub_level: ${{ inputs.sub_level }}

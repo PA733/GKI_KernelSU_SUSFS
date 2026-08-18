@@ -53,6 +53,10 @@ on:
         default: "Sun Dec 01 08:10:00 UTC 2024"
 
       # ==================== 功能开关 ====================
+      clean_build:
+        required: false
+        type: boolean
+        default: false
       use_zram:
         required: true
         type: boolean
@@ -114,6 +118,7 @@ jobs:
           echo "KSU 变体      : ReSukiSU"
           echo "KSU 分支      : ${{ inputs.ksu_branch }}"
           echo "构建时间      : ${{ inputs.build_time }}"
+          echo "清洁构建      : ${{ inputs.clean_build }}"
           echo "SUSFS 状态    : ${{ inputs.enable_susfs }}"
           echo "ZRAM 增强     : ${{ inputs.use_zram }}"
           echo "BBG 补丁      : ${{ inputs.use_bbg }}"
@@ -411,7 +416,7 @@ jobs:
       # ==================== 一加 8E 处理器支持 ====================
       # 添加一加 8E 处理器机型的支持补丁
       - name: 添加一加 8E 处理器支持
-        if: inputs.supp_op
+        if: inputs.clean_build != true && inputs.supp_op
         working-directory: ${{ env.KERNEL_ROOT }}/common/drivers
         run: |
           echo "下载一加 8E 支持补丁..."
@@ -439,7 +444,8 @@ jobs:
 
       # ==================== 添加 KernelSU ====================
       # 添加 ReSukiSU
-      - name: 添加 KernelSU
+      - name: 添加 KernelSU (ReSukiSU)
+        if: inputs.clean_build != true
         working-directory: ${{ env.KERNEL_ROOT }}
         run: |
           echo "添加 ReSukiSU..."
@@ -456,7 +462,7 @@ jobs:
       # ==================== 应用 SUSFS 补丁 ====================
       # SUSFS (Super User SUS FileSystem) 用于隐藏 root 痕迹
       - name: 应用 SUSFS 补丁
-        if: inputs.enable_susfs
+        if: inputs.clean_build != true && inputs.enable_susfs
         working-directory: ${{ env.KERNEL_ROOT }}
         run: |
           echo "应用 SUSFS 补丁..."
@@ -758,7 +764,7 @@ jobs:
           fi
 
       - name: 克隆 Droidspaces 补丁仓库
-        if: inputs.droidspaces != 'off'
+        if: inputs.clean_build != true && inputs.droidspaces != 'off'
         run: |
           git clone --depth 1 https://github.com/ravindu644/Droidspaces-OSS.git /tmp/Droidspaces-OSS
           echo "DROIDSPACES_PATCHES=/tmp/Droidspaces-OSS/Documentation/resources/kernel-patches/GKI" >> $GITHUB_ENV
@@ -769,7 +775,7 @@ jobs:
         run: cp "$DEFCONFIG" "$DEFCONFIG.orig"
 
       - name: 集成 Droidspaces 支持
-        if: inputs.droidspaces != 'off'
+        if: inputs.clean_build != true && inputs.droidspaces != 'off'
         working-directory: ${{ env.KERNEL_ROOT }}/common
         run: |
           KERNEL_VER="${{ inputs.kernel_version }}"
@@ -892,7 +898,7 @@ jobs:
           fi
 
       - name: 注入 NTSync 内核配置
-        if: inputs.droidspaces != 'off' && inputs.droidspaces_ntsync
+        if: inputs.clean_build != true && inputs.droidspaces != 'off' && inputs.droidspaces_ntsync
         working-directory: ${{ env.KERNEL_ROOT }}/common
         run: |
           set -e
@@ -947,7 +953,7 @@ jobs:
           echo "=== NTSync 补丁与配置注入完成 ==="
 
       - name: 应用 Unicode 绕过修复
-        if: inputs.enable_susfs
+        if: inputs.clean_build != true && inputs.enable_susfs
         working-directory: ${{ env.KERNEL_ROOT }}/common
         run: |
           if [ "${{ inputs.kernel_version }}" = "5.10" ] || [ "${{ inputs.kernel_version }}" = "5.15" ]; then
@@ -959,7 +965,7 @@ jobs:
       # ==================== 升级 LZ4 并应用 LZ4KD/LZ4K_OPLUS 补丁 ====================
       # 统一处理 ZRAM 相关的 LZ4 变更，减少重复 step
       - name: 配置 ZRAM LZ4 补丁栈
-        if: inputs.use_zram
+        if: inputs.clean_build != true && inputs.use_zram
         working-directory: ${{ env.KERNEL_ROOT }}/common
         run: |
           # 第一阶段：升级 LZ4 到 1.10.0 并添加 ARM64 NEON 加速
@@ -1046,7 +1052,7 @@ jobs:
       # ==================== 配置 ZRAM 选项 ====================
       # 启用各种 ZRAM 压缩算法
       - name: 配置 ZRAM 选项
-        if: inputs.use_zram
+        if: inputs.clean_build != true && inputs.use_zram
         run: |
           CONFIG_FILE="$DEFCONFIG"
 
@@ -1090,7 +1096,7 @@ jobs:
       # ==================== 添加 BBG 防格机补丁 ====================
       # BBG (Baseband Guard) 防止基带格式化攻击
       - name: 添加 BBG 防格机补丁
-        if: inputs.use_bbg
+        if: inputs.clean_build != true && inputs.use_bbg
         working-directory: ${{ env.KERNEL_ROOT }}
         run: |
           wget -O- https://github.com/vc-teahouse/Baseband-guard/raw/main/setup.sh | bash
@@ -1100,7 +1106,7 @@ jobs:
       # ==================== 应用 Re-Kernel ====================
       # Re-Kernel 通过 GKI Vendor Hooks 提供内核级保护功能
       - name: 应用 Re-Kernel
-        if: inputs.use_rekernel
+        if: inputs.clean_build != true && inputs.use_rekernel
         working-directory: ${{ env.KERNEL_ROOT }}
         run: |
           set -e
@@ -1162,6 +1168,7 @@ jobs:
       # ==================== 配置内核选项 ====================
       # 添加 KernelSU 和其他必要的内核配置
       - name: 配置内核选项
+        if: inputs.clean_build != true
         working-directory: ${{ env.KERNEL_ROOT }}
         run: |
           cat >> "$DEFCONFIG" << 'EOF'
@@ -1205,7 +1212,7 @@ jobs:
       # ==================== 添加 SUSFS 配置 ====================
       # 启用 SUSFS 各项隐藏功能
       - name: 添加 SUSFS 配置
-        if: inputs.enable_susfs
+        if: inputs.clean_build != true && inputs.enable_susfs
         run: |
           cat >> "$DEFCONFIG" << 'EOF'
           CONFIG_KSU_SUSFS=y
