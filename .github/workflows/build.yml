@@ -372,6 +372,27 @@ jobs:
           echo "ACTUAL_SUBLEVEL=$ACTUAL_SUBLEVEL" >> $GITHUB_ENV
           echo "实际子版本号: $ACTUAL_SUBLEVEL"
 
+      # ==================== 修复上游 vm_flags_clear 未声明 ====================
+      # Google 向部分 GKI 分支（如 deprecated/android12-5.10-2024-11）回移 16KB 页迁移特性时，
+      # mm/mmap.c 调用了 vm_flags_clear()，但 include 头文件未同步声明该 helper，
+      # -Werror 下隐式函数声明会直接编译失败。该问题源自上游源码，与 SUSFS 无关，
+      # 因此不能放在「应用 SUSFS 补丁」步骤内（SUSFS 关闭时会被整体跳过）。
+      # 按实际状态检测：仅当 mmap.c 存在调用且所有头文件均未声明时，替换为等价的直接位操作。
+      - name: 修复上游 vm_flags_clear 未声明
+        working-directory: ${{ env.KERNEL_ROOT }}/common
+        run: |
+          if grep -q 'vm_flags_clear(' mm/mmap.c && ! grep -rqs --include='*.h' 'vm_flags_clear' include/; then
+            echo "检测到 mm/mmap.c 调用 vm_flags_clear() 但头文件未声明，替换为直接位操作..."
+            sed -i -E 's/vm_flags_clear\(([A-Za-z_][A-Za-z0-9_]*)[[:space:]]*,[[:space:]]*([^;()]+)\);/\1->vm_flags \&= ~(\2);/g' mm/mmap.c
+            if grep -q 'vm_flags_clear(' mm/mmap.c; then
+              echo "::error::mm/mmap.c 中仍残留无法自动替换的 vm_flags_clear 调用，请人工检查"
+              exit 1
+            fi
+            echo "已修复 mm/mmap.c 中的 vm_flags_clear 调用"
+          else
+            echo "无需修复: 头文件已声明 vm_flags_clear 或 mm/mmap.c 未调用"
+          fi
+
       # ==================== 应用 rtmutex CVE 修复链 ====================
       # 以同步后的实际 SUBLEVEL 判断，避免对已包含上游修复的 LTS 重复打补丁
       - name: 自动应用 CVE-2026-43499 rtmutex 修复链
@@ -643,10 +664,6 @@ jobs:
           if [ "${{ inputs.ksu_variant }}" == "Official" ] || [ "${{ inputs.ksu_variant }}" == "Next" ] || [ "${{ inputs.ksu_variant }}" == "SukiSU" ] || [ "${{ inputs.ksu_variant }}" == "ReSukiSU" ]; then
             # Android 12 - 5.10 修复
             if [[ "${{ inputs.android_version }}" == "android12" && "${{ inputs.kernel_version }}" == "5.10" ]]; then
-              # 修复 2024-11 分支: mmap.c 调用了 vm_flags_clear()，但同分支 mm.h 未提供 helper
-              if [[ "${{ inputs.os_patch_level }}" == "2024-11" ]] && grep -qF 'vm_flags_clear(new_vma, VM_PAD_MASK);' ./mm/mmap.c; then
-                sed -i 's/vm_flags_clear(new_vma, VM_PAD_MASK);/new_vma->vm_flags \&= ~VM_PAD_MASK;/' ./mm/mmap.c
-              fi
                if [[ "$CURRENT_SUB" -le 209 ]]; then
                  sed -i -e 's/goto show_pad;/return 0;/' ./fs/proc/task_mmu.c
                fi
@@ -659,10 +676,6 @@ jobs:
 
              # Android 13 - 5.15 修复
             if [[ "${{ inputs.android_version }}" == "android13" && "${{ inputs.kernel_version }}" == "5.15" ]]; then
-              # 修复 2024-11 分支: mmap.c 调用了 vm_flags_clear()，但同分支 mm.h 未提供 helper
-              if [[ "${{ inputs.os_patch_level }}" == "2024-11" ]] && grep -qF 'vm_flags_clear(new_vma, VM_PAD_MASK);' ./mm/mmap.c; then
-                sed -i 's/vm_flags_clear(new_vma, VM_PAD_MASK);/new_vma->vm_flags \&= ~VM_PAD_MASK;/' ./mm/mmap.c
-              fi
                if [[ "$CURRENT_SUB" -le 148 && "${{ inputs.os_patch_level }}" != "2024-05" ]]; then
                  sed -i -e 's/goto show_pad;/return 0;/' ./fs/proc/task_mmu.c
                fi
