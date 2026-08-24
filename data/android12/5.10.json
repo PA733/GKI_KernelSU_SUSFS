@@ -184,7 +184,7 @@
     },
     {
       "date": "lts",
-      "kernel": "5.10.264",
+      "kernel": "5.10.265",
       "revision": "r1"
     }
   ]
