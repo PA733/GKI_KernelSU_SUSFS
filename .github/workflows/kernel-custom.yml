@@ -71,7 +71,7 @@ on:
 
       # ==================== 功能开关 ====================
       clean_build:
-        description: "清洁构建 (禁用所有附加功能)"
+        description: "清洁构建 (不集成 KernelSU、SUSFS 和可选补丁)"
         type: boolean
         default: false
 
@@ -133,7 +133,7 @@ jobs:
       sub_level: ${{ inputs.sub_level }}
       os_patch_level: ${{ inputs.os_patch_level }}
       revision: ${{ inputs.revision || '' }}
-      ksu_variant: "ReSukiSU"
+      ksu_variant: ${{ inputs.clean_build && 'Clean' || 'ReSukiSU' }}
       ksu_branch: ${{ inputs.kernelsu_branch }}
       version: ${{ inputs.version || '' }}
       build_time: ${{ inputs.build_time || '' }}
@@ -147,5 +147,6 @@ jobs:
       droidspaces_ntsync: ${{ inputs.droidspaces_ntsync || false }}
 
   get-ksu-manager:
+    if: ${{ !inputs.clean_build }}
     uses: ./.github/workflows/get-manager.yml
     secrets: inherit

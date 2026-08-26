@@ -1,7 +1,7 @@
 # ========================================
 # GKI 内核构建工作流
 # ========================================
-# 此工作流负责编译 Android GKI 内核，支持多种 KernelSU 变体和 SUSFS
+# 此工作流负责编译 Android GKI 内核，支持 ReSukiSU、SUSFS 和清洁 GKI 构建
 # 通过 workflow_call 被其他工作流调用，不直接手动触发
 # ========================================
 
@@ -60,11 +60,9 @@ on:
       use_zram:
         required: true
         type: boolean
-        default: true
       use_bbg:
         required: true
         type: boolean
-        default: true
       use_rekernel:
         required: false
         type: boolean
@@ -76,7 +74,6 @@ on:
       enable_susfs:
         required: true
         type: boolean
-        default: true
       supp_op:
         required: false
         type: boolean
@@ -92,13 +89,14 @@ on:
 
 jobs:
   build-kernel:
-    name: "${{ inputs.kernel_version }}.${{ inputs.sub_level }}-${{ inputs.android_version }}-${{ inputs.os_patch_level }}-ReSukiSU"
+    name: "${{ inputs.kernel_version }}.${{ inputs.sub_level }}-${{ inputs.android_version }}-${{ inputs.os_patch_level }}${{ inputs.revision && format('-{0}', inputs.revision) || '' }}-${{ inputs.clean_build && 'Clean' || inputs.ksu_variant }}"
     runs-on: ubuntu-latest
     timeout-minutes: 60
 
     # ==================== 环境变量配置 ====================
     # ccache 配置用于加速重复编译
     env:
+      BUILD_VARIANT: ${{ inputs.clean_build && 'Clean' || inputs.ksu_variant }}
       CCACHE_COMPILERCHECK: "%compiler% -dumpmachine; %compiler% -dumpversion"
       CCACHE_NOHASHDIR: "true"
       CCACHE_HARDLINK: "true"
@@ -115,18 +113,25 @@ jobs:
           echo "内核版本      : ${{ inputs.kernel_version }}"
           echo "子版本号      : ${{ inputs.sub_level }}"
           echo "补丁级别      : ${{ inputs.os_patch_level }}"
-          echo "KSU 变体      : ReSukiSU"
-          echo "KSU 分支      : ${{ inputs.ksu_branch }}"
+          echo "构建模式      : $BUILD_VARIANT"
+          if [ "${{ inputs.clean_build }}" = "true" ]; then
+            echo "KernelSU      : 禁用"
+            echo "KSU 分支      : 不适用"
+            echo "Droidspaces   : off"
+          else
+            echo "KernelSU      : ${{ inputs.ksu_variant }}"
+            echo "KSU 分支      : ${{ inputs.ksu_branch }}"
+            echo "Droidspaces   : ${{ inputs.droidspaces }}"
+          fi
           echo "构建时间      : ${{ inputs.build_time }}"
           echo "清洁构建      : ${{ inputs.clean_build }}"
-          echo "SUSFS 状态    : ${{ inputs.enable_susfs }}"
-          echo "ZRAM 增强     : ${{ inputs.use_zram }}"
-          echo "BBG 补丁      : ${{ inputs.use_bbg }}"
-          echo "Re-Kernel     : ${{ inputs.use_rekernel }}"
-          echo "CVE-2026-43499: ${{ inputs.cve_2026_43499_patch }}"
-          echo "Droidspaces   : ${{ inputs.droidspaces }}"
-          echo "NTSync        : ${{ inputs.droidspaces_ntsync }}"
-          echo "Stock Config  : 自动检测 config/stock_defconfig"
+          echo "SUSFS 状态    : ${{ inputs.clean_build != true && inputs.enable_susfs }}"
+          echo "ZRAM 增强     : ${{ inputs.clean_build != true && inputs.use_zram }}"
+          echo "BBG 补丁      : ${{ inputs.clean_build != true && inputs.use_bbg }}"
+          echo "Re-Kernel     : ${{ inputs.clean_build != true && inputs.use_rekernel }}"
+          echo "CVE-2026-43499: ${{ inputs.clean_build != true && inputs.cve_2026_43499_patch }}"
+          echo "NTSync        : ${{ inputs.clean_build != true && inputs.droidspaces != 'off' && inputs.droidspaces_ntsync }}"
+          echo "Stock Config  : ${{ inputs.clean_build && '禁用' || '自动检测 config/stock_defconfig' }}"
           echo "========================================"
 
       # ==================== 清理磁盘空间 ====================
@@ -155,8 +160,13 @@ jobs:
       - name: 初始化构建环境
         run: |
           # 构建配置标识
-          CONFIG="${{ inputs.android_version }}-${{ inputs.kernel_version }}-${{ inputs.sub_level }}"
-          KERNEL_ROOT="$GITHUB_WORKSPACE/$CONFIG"
+          KERNEL_CONFIG="${{ inputs.android_version }}-${{ inputs.kernel_version }}-${{ inputs.sub_level }}"
+          REVISION_SUFFIX=""
+          if [ -n "${{ inputs.revision }}" ]; then
+            REVISION_SUFFIX="-${{ inputs.revision }}"
+          fi
+          CONFIG="${{ inputs.android_version }}-${{ inputs.kernel_version }}.${{ inputs.sub_level }}-${{ inputs.os_patch_level }}${REVISION_SUFFIX}"
+          KERNEL_ROOT="$GITHUB_WORKSPACE/$KERNEL_CONFIG"
           mkdir -p "$KERNEL_ROOT"
 
           # 导出环境变量到后续步骤
@@ -174,6 +184,8 @@ jobs:
           MKBOOTIMG=$GITHUB_WORKSPACE/mkbootimg/mkbootimg.py
           UNPACK_BOOTIMG=$GITHUB_WORKSPACE/mkbootimg/unpack_bootimg.py
           BOOT_SIGN_KEY_PATH=$GITHUB_WORKSPACE/kernel-build-tools/linux-x86/share/avb/testkey_rsa2048.pem
+          KSU_LATEST_COMMIT_DATE=未启用
+          SUSFS_LATEST_COMMIT_DATE=未启用
           EOF
 
           # 下载并配置 repo 工具 (用于同步 Android 内核源码)
@@ -252,7 +264,7 @@ jobs:
           git config --global user.email "BuildGkiKernel@gmail.com"
 
       # ==================== 克隆依赖仓库 ====================
-      # 克隆 AnyKernel3、SUSFS、各种补丁仓库
+      # AnyKernel3 始终需要；清洁构建不下载不会使用的功能仓库
       - name: 克隆依赖仓库
         run: |
           ANYKERNEL_BRANCH="master"
@@ -261,6 +273,21 @@ jobs:
           echo "克隆 AnyKernel3..."
           git clone https://github.com/ReSukiSU-GKI/AnyKernel3.git -b "master"
           rm -rf AnyKernel3/.git
+
+          if [ "${{ inputs.clean_build }}" = "true" ]; then
+            echo "清理 AnyKernel3 中不适用于清洁构建的品牌信息..."
+            sed -i 's/^kernel.string=.*/kernel.string=Clean GKI kernel build/' AnyKernel3/anykernel.sh
+            sed -i '/^ui_print "Our Telegram Channel:"/,$d' AnyKernel3/anykernel.sh
+            rm -f AnyKernel3/banner
+
+            if grep -Rqs 'ReSukiSU' AnyKernel3; then
+              echo "::error::清洁构建的 AnyKernel3 中仍包含 ReSukiSU 标识"
+              exit 1
+            fi
+
+            echo "清洁构建无需 SUSFS 和功能补丁仓库，跳过下载。"
+            exit 0
+          fi
 
           echo "克隆 SUSFS (分支: $SUSFS_BRANCH)..."
           # ReSukiSU 使用 simonpunk 的原版 SUSFS
@@ -319,6 +346,7 @@ jobs:
       # ==================== 伪装 /proc/config.gz（自动检测） ====================
       # 若仓库存在 config/stock_defconfig，则自动应用；不存在则跳过
       - name: 应用 Stock Config 伪装
+        if: inputs.clean_build != true
         run: |
           # 仓库内的 stock_defconfig 来源与内核源码目标路径
           STOCK_SRC="$GITHUB_WORKSPACE/config/stock_defconfig"
@@ -396,7 +424,7 @@ jobs:
       # ==================== 应用 rtmutex CVE 修复链 ====================
       # 以同步后的实际 SUBLEVEL 判断，避免对已包含上游修复的 LTS 重复打补丁
       - name: 自动应用 CVE-2026-43499 rtmutex 修复链
-        if: inputs.cve_2026_43499_patch
+        if: inputs.clean_build != true && inputs.cve_2026_43499_patch
         working-directory: ${{ env.KERNEL_ROOT }}/common
         run: |
           bash "$GITHUB_WORKSPACE/security_patch/apply_cve_2026_43499.sh" \
@@ -448,6 +476,7 @@ jobs:
       # ReSukiSU 支持自定义分支或 commit hash
       - name: 确定 KernelSU 分支
         id: ksu-branch
+        if: inputs.clean_build != true
         run: |
           branch_input="${{ inputs.ksu_branch }}"
 
@@ -465,7 +494,7 @@ jobs:
 
       # ==================== 添加 KernelSU ====================
       # 添加 ReSukiSU
-      - name: 添加 KernelSU (ReSukiSU)
+      - name: 添加 KernelSU
         if: inputs.clean_build != true
         working-directory: ${{ env.KERNEL_ROOT }}
         run: |
@@ -1012,7 +1041,7 @@ jobs:
       # ==================== 修复 6.6 WiFi/蓝牙兼容性（三星 + 小米） ====================
       # 合并三星与小米修复，并采用幂等写法避免重复追加导致脏变更
       - name: 修复 6.6 WiFi/蓝牙兼容性（三星 + 小米）
-        if: inputs.kernel_version == '6.6'
+        if: inputs.clean_build != true && inputs.kernel_version == '6.6'
         working-directory: ${{ env.KERNEL_ROOT }}/common
         run: |
           # 仅在行不存在时追加，避免重复执行污染文件
@@ -1190,16 +1219,6 @@ jobs:
           CONFIG_TMPFS_POSIX_ACL=y
           EOF
 
-          if [ "${{ inputs.ksu_variant }}" == "SukiSU" ] || [ "${{ inputs.ksu_variant }}" == "ReSukiSU" ] || [ "${{ inputs.ksu_variant }}" == "Next" ]; then
-            if [[ "${{ inputs.use_kpm }}" == enabled* ]] || [[ "${{ inputs.use_kpm }}" == patched* ]]; then
-              if ! grep -RqsE '^[[:space:]]*config[[:space:]]+KPM([[:space:]]|$)' common KernelSU 2>/dev/null; then
-                echo "错误: 已请求启用 KPM，但当前 KernelSU 代码未声明 CONFIG_KPM" >&2
-                exit 1
-              fi
-              echo "CONFIG_KPM=y" >> "$DEFCONFIG"
-            fi
-          fi
-
           CURRENT_SUB="${{ inputs.sub_level }}"
           if [[ ! "$CURRENT_SUB" =~ ^[0-9]+$ ]]; then
             CURRENT_SUB=99999
@@ -1340,7 +1359,7 @@ jobs:
 
       # ==================== 编译内核 ====================
       # 使用重试机制编译内核，超时后自动重试
-      - name: 构建——如出错为该KSU暂时未同步SUSFS代码或编译时错误(等待该KSU仓库修复)
+      - name: 构建内核
         uses: nick-fields/retry@v4
         with:
           timeout_minutes: 30
@@ -1348,13 +1367,15 @@ jobs:
           retry_on: timeout
           command: |
             echo "::group::构建说明"
-            echo "一般情况下不会出错，除非KSU仓库和SUSFS仓库代码不同。"
-            echo "不要问，不要急，这跟你怎么努力，或者跟我反馈没关系，因为这跟我无关。"
-            echo "等待适配即可，你有能力则自己去SUKISU仓库提交代码，"
+            echo "构建模式: $BUILD_VARIANT"
+            if [ "${{ inputs.clean_build }}" = "true" ]; then
+              echo "清洁构建未集成 KernelSU、SUSFS 或可选功能补丁。"
+            else
+              echo "KernelSU 提交日期: ${KSU_LATEST_COMMIT_DATE}"
+              echo "SUSFS 提交日期: ${SUSFS_LATEST_COMMIT_DATE}"
+            fi
             echo "::endgroup::"
-            
-            echo "当前 KSU 最新提交日期: ${KSU_LATEST_COMMIT_DATE}"
-            echo "当前 SUSFS 最新提交日期: ${SUSFS_LATEST_COMMIT_DATE}"
+
             set -ex
             cd "$KERNEL_ROOT"
 
@@ -1389,12 +1410,7 @@ jobs:
               strings ./bazel-bin/common/kernel_aarch64/Image | grep 'Linux version'
             fi
 
-            echo "一般情况下不会出错，除非KSU仓库和SUSFS仓库代码不同。"
-            echo "不要问，不要急，这跟你怎么努力，或者跟我反馈没关系，因为这跟我无关。"
-            echo "等待适配即可，你有能力则自己去SUKISU仓库提交代码，"
-            echo "当前 KSU 最新提交日期: ${KSU_LATEST_COMMIT_DATE}"
-            echo "当前 SUSFS 最新提交日期: ${SUSFS_LATEST_COMMIT_DATE}"
-            echo "如果日期不同或相差过远则补丁失效、编译失败"
+            echo "构建完成: $BUILD_VARIANT"
 
       # ==================== 准备内核 Image ====================
       # 复制编译产物到工作目录，供 AnyKernel3 打包使用
@@ -1412,7 +1428,7 @@ jobs:
       - name: 创建 AnyKernel3 压缩包
         run: |
           cd $ANYKERNEL3
-          ZIP_NAME="${{ inputs.android_version }}-${{ inputs.kernel_version }}.${{ inputs.sub_level }}-${{ inputs.os_patch_level }}-AnyKernel3.zip"
+          ZIP_NAME="${CONFIG}-${BUILD_VARIANT}-AnyKernel3.zip"
           mv ../Image ./Image
           zip -r "../$ZIP_NAME" ./*
 
@@ -1509,7 +1525,7 @@ jobs:
       - name: 上传构建产物
         uses: actions/upload-artifact@v6
         with:
-          name: ReSukiSU_kernel-${{ env.CONFIG }}
+          name: ${{ env.BUILD_VARIANT }}_kernel-${{ env.CONFIG }}
           path: |
             *AnyKernel3.zip
 #            *.img
@@ -1520,7 +1536,7 @@ jobs:
         if: always() && env.REJ_COUNT > 0
         uses: actions/upload-artifact@v6
         with:
-          name: ReSukiSU_kernel-${{ env.CONFIG }}-Rejects
+          name: ${{ env.BUILD_VARIANT }}_kernel-${{ env.CONFIG }}-Rejects
           path: patch-rejects/
           if-no-files-found: ignore
           compression-level: 9

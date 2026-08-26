@@ -18,7 +18,7 @@ on:
         type: string
         default: ""
       clean_build:
-        description: "清洁构建 (禁用所有附加功能)"
+        description: "清洁构建 (不集成 KernelSU、SUSFS 和可选补丁)"
         required: false
         type: boolean
         default: false
@@ -169,7 +169,7 @@ jobs:
       sub_level: ${{ matrix.sub_level }}
       os_patch_level: ${{ matrix.os_patch_level }}
       revision: ${{ matrix.revision }}
-      ksu_variant: "ReSukiSU"
+      ksu_variant: ${{ inputs.clean_build && 'Clean' || 'ReSukiSU' }}
       ksu_branch: ${{ inputs.kernelsu_branch }}
       version: ${{ inputs.version || '' }}
       build_time: ${{ inputs.build_time || '' }}
@@ -184,6 +184,6 @@ jobs:
 
   # 仅在直接触发时运行，从 main.yml 调用时跳过
   get-ksu-manager:
-    if: ${{ !inputs.called_from_main }}
+    if: ${{ !inputs.clean_build && !inputs.called_from_main }}
     uses: ./.github/workflows/get-manager.yml
     secrets: inherit

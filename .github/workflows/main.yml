@@ -71,7 +71,7 @@ on:
 
       # ==================== 功能开关 ====================
       clean_build:
-        description: "清洁构建 (禁用所有附加功能)"
+        description: "清洁构建 (不集成 KernelSU、SUSFS 和可选补丁)"
         type: boolean
         default: false
 
@@ -138,6 +138,7 @@ jobs:
   # ==================== 获取管理器 ====================
   # 下载最新的 KernelSU 管理器 APK 和 SUSFS 模块
   get-manager:
+    if: ${{ !inputs.clean_build }}
     uses: ./.github/workflows/get-manager.yml
     secrets: inherit
 
@@ -303,29 +304,44 @@ jobs:
       # 预计算各种显示名称，简化后续引用
       - name: 设置显示名称
         run: |
-          KSU_NAME="ReSukiSU"
-          echo "KSU_NAME=$KSU_NAME" >> $GITHUB_ENV
-
-          KSU_VER="${{ needs.get-manager.outputs.ksuVer }}"
-          SUS_VER="${{ needs.get-manager.outputs.susVer }}"
-          echo "KSU_VER=$KSU_VER" >> $GITHUB_ENV
-          echo "SUS_VER=$SUS_VER" >> $GITHUB_ENV
-
-          echo "LZ4_STATUS=${{ inputs.use_zram && '开启' || '未开启' }}" >> $GITHUB_ENV
-          echo "BBG_STATUS=${{ inputs.use_bbg && '支持' || '不支持' }}" >> $GITHUB_ENV
-          echo "LZ4_SUFFIX=${{ inputs.use_zram && '、LZ4KD' || '' }}" >> $GITHUB_ENV
-
-          echo "HOOK_TYPE=-> SUSFS Inline Hooks" >> $GITHUB_ENV
-          echo "MOUNT_TYPE=-> Magic Mount 支持" >> $GITHUB_ENV
-          echo "KSU_SUFFIX=" >> $GITHUB_ENV
-
-          if [ -n "${{ inputs.kernelsu_branch }}" ]; then
-            echo "BRANCH_INFO=(${{ inputs.kernelsu_branch }})" >> $GITHUB_ENV
+          if [ "${{ inputs.clean_build }}" = "true" ]; then
+            KSU_NAME="Clean"
+            KSU_VER=""
+            SUS_VER=""
+            RELEASE_NAME="GKI内核: Clean"
+            echo "LZ4_STATUS=未开启" >> "$GITHUB_ENV"
+            echo "BBG_STATUS=不支持" >> "$GITHUB_ENV"
+            echo "LZ4_SUFFIX=" >> "$GITHUB_ENV"
+            echo "HOOK_TYPE=" >> "$GITHUB_ENV"
+            echo "MOUNT_TYPE=" >> "$GITHUB_ENV"
+            echo "BRANCH_INFO=" >> "$GITHUB_ENV"
           else
-            echo "BRANCH_INFO=稳定版" >> $GITHUB_ENV
+            KSU_NAME="ReSukiSU"
+            KSU_VER="${{ needs.get-manager.outputs.ksuVer }}"
+            SUS_VER="${{ needs.get-manager.outputs.susVer }}"
+            if [ -z "$KSU_VER" ] || [ -z "$SUS_VER" ]; then
+              echo "::error::未获取到 KernelSU 或 SUSFS 版本，停止创建发布。"
+              exit 1
+            fi
+            RELEASE_NAME="GKI内核: ${KSU_NAME}(${KSU_VER}) & SUSFS ${SUS_VER}"
+            echo "LZ4_STATUS=${{ inputs.use_zram && '开启' || '未开启' }}" >> "$GITHUB_ENV"
+            echo "BBG_STATUS=${{ inputs.use_bbg && '支持' || '不支持' }}" >> "$GITHUB_ENV"
+            echo "LZ4_SUFFIX=${{ inputs.use_zram && '、LZ4KD' || '' }}" >> "$GITHUB_ENV"
+            echo "HOOK_TYPE=-> SUSFS Inline Hooks" >> "$GITHUB_ENV"
+            echo "MOUNT_TYPE=-> Magic Mount 支持" >> "$GITHUB_ENV"
+
+            if [ -n "${{ inputs.kernelsu_branch }}" ]; then
+              echo "BRANCH_INFO=(${{ inputs.kernelsu_branch }})" >> "$GITHUB_ENV"
+            else
+              echo "BRANCH_INFO=稳定版" >> "$GITHUB_ENV"
+            fi
           fi
 
-          echo "RELEASE_NAME=GKI内核: ${KSU_NAME}(${KSU_VER}) & SUSFS ${SUS_VER}" >> $GITHUB_ENV
+          echo "KSU_NAME=$KSU_NAME" >> "$GITHUB_ENV"
+          echo "KSU_VER=$KSU_VER" >> "$GITHUB_ENV"
+          echo "SUS_VER=$SUS_VER" >> "$GITHUB_ENV"
+          echo "KSU_SUFFIX=" >> "$GITHUB_ENV"
+          echo "RELEASE_NAME=$RELEASE_NAME" >> "$GITHUB_ENV"
 
       - name: 验证构建状态
         run: |
@@ -350,12 +366,13 @@ jobs:
           ref: ${{ github.sha }}
 
       - name: 确定 KSU 分支
-        if: inputs.kernelsu_branch != ''
+        if: inputs.clean_build != true && inputs.kernelsu_branch != ''
         run: |
           BRANCH="${{ inputs.kernelsu_branch }}"
           echo "KSU_BRANCH=$BRANCH" >> $GITHUB_ENV
 
       - name: 获取 KernelSU 提交信息
+        if: inputs.clean_build != true
         run: |
           REPO_URL="https://github.com/ReSukiSU/ReSukiSU.git"
           REPO_URL2="ReSukiSU/ReSukiSU"
@@ -384,6 +401,7 @@ jobs:
           echo "KSU_URL=$KSU_URL" >> $GITHUB_ENV
 
       - name: 获取 SUSFS 提交信息
+        if: inputs.clean_build != true
         run: |
           GITLAB_OWNER="simonpunk"
           GITLAB_REPO="susfs4ksu"
@@ -404,7 +422,31 @@ jobs:
             fi
           done
 
-      - name: 生成发布说明
+      - name: 生成清洁构建发布说明
+        if: inputs.clean_build
+        run: |
+          cat > release_body.md << 'EOF'
+          ## 清洁 GKI 构建 / Clean GKI Build
+
+          此发布包含未集成 KernelSU、SUSFS 或其他可选功能补丁的 GKI 内核。
+
+          This release contains GKI kernels without KernelSU, SUSFS, or optional feature patches.
+
+          | 组件 / Component | 状态 / Status |
+          |:---|:---|
+          | KernelSU | 未集成 / Not included |
+          | SUSFS | 未集成 / Not included |
+          | ZRAM、BBG、Re-Kernel、Droidspaces | 未集成 / Not included |
+
+          > 刷入前请备份原厂 Boot 镜像，并确认内核版本与设备兼容。
+
+          **LTO**: thin（6.12 使用 none）
+
+          点击下方 **Assets** 展开下载 / Expand **Assets** below to download.
+          EOF
+
+      - name: 生成常规发布说明
+        if: inputs.clean_build != true
         run: |
           cat > release_body.md << EOF
           ## 📦 本次发布内容 / Release Contents
@@ -501,21 +543,35 @@ jobs:
 
       - name: 生成版本标签
         run: |
-          SUS_VERSION="${{ needs.get-manager.outputs.susVer }}"
+          if [ "${{ inputs.clean_build }}" = "true" ]; then
+            SUS_VERSION="clean"
+          else
+            SUS_VERSION="${{ needs.get-manager.outputs.susVer }}"
+          fi
           if [ -z "$SUS_VERSION" ]; then
             echo "警告: 未获取到 SUSFS 版本，使用默认版本号"
             SUS_VERSION="1.0.0"
           fi
 
-          LATEST_TAG=$(gh api repos/$REPO_OWNER/$REPO_NAME/tags --jq '.[0].name' 2>/dev/null | sed 's/-.*//' || echo "")
+          MAX_REV=0
+          EXISTING_TAGS=$(
+            {
+              gh api --paginate "repos/$REPO_OWNER/$REPO_NAME/tags?per_page=100" --jq '.[].name'
+              gh api --paginate "repos/$REPO_OWNER/$REPO_NAME/releases?per_page=100" --jq '.[].tag_name'
+            } | sort -u
+          )
+          while IFS= read -r TAG; do
+            case "$TAG" in
+              "$SUS_VERSION"-r*)
+                REVISION="${TAG#"$SUS_VERSION-r"}"
+                if [[ "$REVISION" =~ ^[0-9]+$ ]] && (( REVISION > MAX_REV )); then
+                  MAX_REV=$REVISION
+                fi
+                ;;
+            esac
+          done <<< "$EXISTING_TAGS"
 
-          if [ "$SUS_VERSION" = "$LATEST_TAG" ]; then
-            LATEST_TAG=$(gh api repos/$REPO_OWNER/$REPO_NAME/tags --jq '.[0].name')
-          else
-            LATEST_TAG="$SUS_VERSION-r0"
-          fi
-
-          NEW_TAG=$(echo "$LATEST_TAG" | awk -F'-r' '{suffix=$2; if (!suffix) suffix=0; suffix++; printf "%s-r%d", $1, suffix}')
+          NEW_TAG="${SUS_VERSION}-r$((MAX_REV + 1))"
           echo "NEW_TAG=$NEW_TAG" >> $GITHUB_ENV
 
           echo "生成标签: $NEW_TAG"
@@ -524,6 +580,25 @@ jobs:
         uses: actions/download-artifact@v8
         with:
           path: ./downloaded-artifacts
+
+      - name: 验证发布产物
+        run: |
+          KERNEL_COUNT=$(find ./downloaded-artifacts -type f -path './downloaded-artifacts/*_kernel-*/*' -name '*AnyKernel3.zip' | wc -l)
+          if [ "$KERNEL_COUNT" -eq 0 ]; then
+            echo "::error::未找到可发布的内核 AnyKernel3 包。"
+            exit 1
+          fi
+          echo "内核包数量: $KERNEL_COUNT"
+
+          if [ "${{ inputs.clean_build }}" != "true" ]; then
+            APK_COUNT=$(find ./downloaded-artifacts -type f -name '*.apk' | wc -l)
+            SUSFS_COUNT=$(find ./downloaded-artifacts -type f -path './downloaded-artifacts/susfs-*/*' | wc -l)
+            if [ "$APK_COUNT" -eq 0 ] || [ "$SUSFS_COUNT" -eq 0 ]; then
+              echo "::error::正常发布缺少管理器 APK 或 SUSFS 模块。"
+              exit 1
+            fi
+            echo "管理器 APK: $APK_COUNT，SUSFS 模块: $SUSFS_COUNT"
+          fi
 
       - name: 创建 GitHub Release
         run: |
@@ -536,10 +611,11 @@ jobs:
             --title "${{ env.RELEASE_NAME }}" \
             --notes-file release_body.md \
             --target "$GITHUB_SHA" \
+            --draft \
             $PRERELEASE_FLAG
 
       - name: 上传管理器和 SUSFS 模块
-        continue-on-error: true
+        if: inputs.clean_build != true
         run: |
           echo "准备上传 APK 与 SUSFS 模块..."
           apk_count=$(find ./downloaded-artifacts -type f -name "*.apk" | wc -l || true)
@@ -548,11 +624,11 @@ jobs:
           echo "SUSFS files: ${sus_count}"
           find ./downloaded-artifacts -type f -name "*.apk" -print0 | \
           while IFS= read -r -d '' f; do
-            gh release upload "$NEW_TAG" "$f" || true
+            gh release upload "$NEW_TAG" "$f"
           done
           find ./downloaded-artifacts -type f -path "./downloaded-artifacts/susfs-*/*" -print0 | \
           while IFS= read -r -d '' f; do
-            gh release upload "$NEW_TAG" "$f" || true
+            gh release upload "$NEW_TAG" "$f"
           done
 
       - name: 上传内核产物
@@ -593,20 +669,20 @@ jobs:
           Tag: <code>${NEW_TAG}</code>
           
           Features: 
-          <pre>ReSukiSU = true
-          SuSFS = ${{ inputs.cancel_susfs && 'false' || 'true' }}
-          BBG = ${{ inputs.use_bbg && 'true' || 'false' }}
-          LZ4KD = ${{ inputs.use_zram && 'true' || 'false' }}
-          Re-Kernel = ${{ inputs.use_rekernel && 'true' || 'false' }}
-          Droidspaces = ${{ inputs.droidspaces }}${{ inputs.droidspaces_ntsync && ' + NTSync' || '' }}
-          KPatch-Next Support = true</pre>
+          <pre>Build mode = ${{ inputs.clean_build && 'Clean' || 'ReSukiSU' }}
+          SuSFS = ${{ inputs.clean_build != true && inputs.cancel_susfs != true && 'true' || 'false' }}
+          BBG = ${{ inputs.clean_build != true && inputs.use_bbg && 'true' || 'false' }}
+          LZ4KD = ${{ inputs.clean_build != true && inputs.use_zram && 'true' || 'false' }}
+          Re-Kernel = ${{ inputs.clean_build != true && inputs.use_rekernel && 'true' || 'false' }}
+          Droidspaces = ${{ inputs.clean_build && 'off' || inputs.droidspaces }}${{ inputs.clean_build != true && inputs.droidspaces_ntsync && ' + NTSync' || '' }}
+          KPatch-Next Support = ${{ inputs.clean_build != true && 'true' || 'false' }}</pre>
           Change Log: 
           <pre>${INPUT_CHANGE_LOG}
           </pre>
           
           Download: <a href="https://github.com/ReSukiSU-GKI/GKI_KernelSU_SUSFS/releases/tag/${NEW_TAG}">Click Here</a>
 
-          Note: The "commit" here refers to ReSukiSU's commit, not this repository's.
+          Workflow commit: <code>${{ github.sha }}</code>
           EOF
           )
 
@@ -615,7 +691,7 @@ jobs:
             -d parse_mode="HTML" \
             --data-urlencode text="${TEXT}"
             
-      - name: 发送 Telegram 群组通知(ReSukiSU群组)
+      - name: 发送 Telegram 社区群组通知
         env:
           BOT_TOKEN: ${{ secrets.BOT_TOKEN }}
           CHAT_ID: ${{ secrets.CHAT_ID_2 }}
@@ -634,20 +710,20 @@ jobs:
           Tag: <code>${NEW_TAG}</code>
           
           Features: 
-          <pre>ReSukiSU = ${{ inputs.kernelsu_variant == 'ReSukiSU' && 'true' || 'false' }}
-          SuSFS = ${{ inputs.cancel_susfs && 'false' || 'true' }}
-          BBG = ${{ inputs.use_bbg && 'true' || 'false' }}
-          LZ4KD = ${{ inputs.use_zram && 'true' || 'false' }}
-          Re-Kernel = ${{ inputs.use_rekernel && 'true' || 'false' }}
-          Droidspaces = ${{ inputs.droidspaces }}${{ inputs.droidspaces_ntsync && ' + NTSync' || '' }}
-          KPatch-Next Support = true</pre>
+          <pre>Build mode = ${{ inputs.clean_build && 'Clean' || 'ReSukiSU' }}
+          SuSFS = ${{ inputs.clean_build != true && inputs.cancel_susfs != true && 'true' || 'false' }}
+          BBG = ${{ inputs.clean_build != true && inputs.use_bbg && 'true' || 'false' }}
+          LZ4KD = ${{ inputs.clean_build != true && inputs.use_zram && 'true' || 'false' }}
+          Re-Kernel = ${{ inputs.clean_build != true && inputs.use_rekernel && 'true' || 'false' }}
+          Droidspaces = ${{ inputs.clean_build && 'off' || inputs.droidspaces }}${{ inputs.clean_build != true && inputs.droidspaces_ntsync && ' + NTSync' || '' }}
+          KPatch-Next Support = ${{ inputs.clean_build != true && 'true' || 'false' }}</pre>
           Change Log: 
           <pre>${INPUT_CHANGE_LOG}
           </pre>
           
           Download: <a href="https://github.com/ReSukiSU-GKI/GKI_KernelSU_SUSFS/releases/tag/${NEW_TAG}">Click Here</a>
 
-          Note: The "commit" here refers to ReSukiSU's commit, not this repository's.
+          Workflow commit: <code>${{ github.sha }}</code>
           EOF
           )
 
@@ -676,20 +752,20 @@ jobs:
           Tag: <code>${NEW_TAG}</code>
           
           Features: 
-          <pre>ReSukiSU = ${{ inputs.kernelsu_variant == 'ReSukiSU' && 'true' || 'false' }}
-          SuSFS = ${{ inputs.cancel_susfs && 'false' || 'true' }}
-          BBG = ${{ inputs.use_bbg && 'true' || 'false' }}
-          LZ4KD = ${{ inputs.use_zram && 'true' || 'false' }}
-          Re-Kernel = ${{ inputs.use_rekernel && 'true' || 'false' }}
-          Droidspaces = ${{ inputs.droidspaces }}${{ inputs.droidspaces_ntsync && ' + NTSync' || '' }}
-          KPatch-Next Support = true</pre>
+          <pre>Build mode = ${{ inputs.clean_build && 'Clean' || 'ReSukiSU' }}
+          SuSFS = ${{ inputs.clean_build != true && inputs.cancel_susfs != true && 'true' || 'false' }}
+          BBG = ${{ inputs.clean_build != true && inputs.use_bbg && 'true' || 'false' }}
+          LZ4KD = ${{ inputs.clean_build != true && inputs.use_zram && 'true' || 'false' }}
+          Re-Kernel = ${{ inputs.clean_build != true && inputs.use_rekernel && 'true' || 'false' }}
+          Droidspaces = ${{ inputs.clean_build && 'off' || inputs.droidspaces }}${{ inputs.clean_build != true && inputs.droidspaces_ntsync && ' + NTSync' || '' }}
+          KPatch-Next Support = ${{ inputs.clean_build != true && 'true' || 'false' }}</pre>
           Change Log: 
           <pre>${INPUT_CHANGE_LOG}
           </pre>
           
           Download: <a href="https://github.com/ReSukiSU-GKI/GKI_KernelSU_SUSFS/releases/tag/${NEW_TAG}">Click Here</a>
 
-          Note: The "commit" here refers to ReSukiSU's commit, not this repository's.
+          Workflow commit: <code>${{ github.sha }}</code>
           EOF
           )
 

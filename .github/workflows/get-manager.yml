@@ -34,15 +34,15 @@ jobs:
       GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
     steps:
-      - name: 🧐 Debug Workflow Caller Context
+      - name: Debug Workflow Caller Context
         run: |
           echo "==================== DEBUG CONTEXT ===================="
           echo " "
           echo "EVENT NAME: ${{ github.event_name }}"
           echo " "
           echo "--- CALLER INFORMATION ---"
-          echo "  - Caller Repository: ${{ github.caller_repository }}"
-          echo "  - Caller Workflow:   ${{ github.caller_workflow }}"
+          echo "  - Caller Repository: ${{ github.repository }}"
+          echo "  - Caller Workflow:   ${{ github.workflow_ref }}"
           echo "  - Caller User:       ${{ github.triggering_actor }}"
           echo " "
           echo "--- WORKFLOW & JOB INFORMATION ---"
