@@ -1,11 +1,12 @@
+import base64
+import binascii
+import http.client
 import os
 import re
-import base64
 import time
-import http.client
-import urllib.request
 import urllib.error
-from datetime import datetime
+import urllib.request
+from datetime import datetime, timezone
 
 BASE_URL = "https://android.googlesource.com/kernel/common/+/refs/heads"
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -22,18 +23,25 @@ TARGETS = {
     ("android16", "6.12"): ("2025-06", None,       ""),
 }
 
-import binascii
+TRANSIENT_ERRORS = (
+    urllib.error.URLError,
+    TimeoutError,
+    http.client.RemoteDisconnected,
+    ConnectionResetError,
+    OSError,
+    binascii.Error,
+)
 
-ERRORS = (urllib.error.HTTPError, urllib.error.URLError,
-          TimeoutError, http.client.RemoteDisconnected,
-          ConnectionResetError, OSError, binascii.Error)
+
+class FetchError(RuntimeError):
+    """Raised when an upstream request fails after retries."""
 
 
 def get_end_date(end: str | None) -> str:
     """返回结束日期：如果为 None 则使用当前月份"""
     if end is not None:
         return end
-    return datetime.now().strftime("%Y-%m")
+    return datetime.now(timezone.utc).strftime("%Y-%m")
 
 
 def make_date_range(start: str, end: str) -> list[str]:
@@ -51,13 +59,28 @@ def make_date_range(start: str, end: str) -> list[str]:
     return dates
 
 
-def try_fetch(url: str) -> str | None:
-    """尝试请求一个 URL，失败返回 None"""
-    try:
-        with urllib.request.urlopen(url, timeout=20) as resp:
-            return base64.b64decode(resp.read()).decode("utf-8", errors="replace")
-    except ERRORS:
-        return None
+def try_fetch(url: str, attempts: int = 3) -> str | None:
+    """Fetch and decode a googlesource file; return None only for HTTP 404."""
+    request = urllib.request.Request(url, headers={"User-Agent": "GKI-data-updater"})
+    last_error: BaseException | None = None
+
+    for attempt in range(1, attempts + 1):
+        try:
+            with urllib.request.urlopen(request, timeout=20) as response:
+                encoded = b"".join(response.read().split())
+                content = base64.b64decode(encoded, validate=True)
+                return content.decode("utf-8", errors="replace")
+        except urllib.error.HTTPError as error:
+            if error.code == 404:
+                return None
+            last_error = error
+        except TRANSIENT_ERRORS as error:
+            last_error = error
+
+        if attempt < attempts:
+            time.sleep(attempt)
+
+    raise FetchError(f"failed to fetch {url}: {last_error}")
 
 
 def fetch_makefile(android_ver: str, kernel_ver: str, date: str,

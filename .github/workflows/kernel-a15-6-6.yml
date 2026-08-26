@@ -137,32 +137,15 @@ on:
         default: false
 
 jobs:
-  # 1. 前置准备任务：读取、去重并解析 6.6.json
   prepare-matrix:
-    runs-on: ubuntu-latest
-    outputs:
-      matrix: ${{ steps.set-matrix.outputs.matrix }}
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
+    uses: ./.github/workflows/prepare-matrix.yml
+    with:
+      data_file: data/android15/6.6.json
+      deduplicate_sublevels: true
 
-      - name: Read and Parse 6.6.json Matrix
-        id: set-matrix
-        run: |
-          # 修复 jq 的上下文混淆导致 Cannot index array with string "lts" 的 Bug
-          MATRIX_JSON=$(jq -c '
-            [
-              ( .entries | map({ sub_level: (.kernel | split(".") | .[2]), os_patch_level: .date }) | unique_by(.sub_level)[] ),
-              { sub_level: (.lts | split(".") | .[2]), os_patch_level: "lts" }
-            ]
-          ' ./data/android15/6.6.json)
-          
-          echo "matrix=${MATRIX_JSON}" >> $GITHUB_OUTPUT
-
-  # 2. 动态生成的内核编译主任务
   build-kernels-a15-6-6:
     needs: prepare-matrix
-    name: "6.6.${{ matrix.sub_level }}-${{ matrix.os_patch_level }}"
+    name: "${{ matrix.kernel_version }}.${{ matrix.sub_level }}-${{ matrix.os_patch_level }}"
     strategy:
       fail-fast: false
       matrix:
@@ -171,10 +154,11 @@ jobs:
     secrets: inherit
     with:
       clean_build: ${{ inputs.clean_build }}
-      android_version: "android15"
-      kernel_version: "6.6"
+      android_version: ${{ matrix.android_version }}
+      kernel_version: ${{ matrix.kernel_version }}
       sub_level: ${{ matrix.sub_level }}
       os_patch_level: ${{ matrix.os_patch_level }}
+      revision: ${{ matrix.revision || '' }}
       ksu_variant: ${{ inputs.clean_build && 'Clean' || 'ReSukiSU' }}
       ksu_branch: ${{ inputs.kernelsu_branch }}
       version: ${{ inputs.version || '' }}
@@ -189,7 +173,7 @@ jobs:
       droidspaces_ntsync: ${{ inputs.droidspaces_ntsync || false }}
       build_bypass: ${{ inputs.build_bypass || false }}
 
-  # 3. 仅在直接触发时运行，从 main.yml 调用时跳过
+  # 仅在直接触发时运行，从 main.yml 调用时跳过
   get-ksu-manager:
     if: ${{ !inputs.clean_build && !inputs.called_from_main }}
     uses: ./.github/workflows/get-manager.yml
