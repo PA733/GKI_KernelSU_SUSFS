@@ -3,9 +3,8 @@
 # ========================================
 # 此工作流是项目的统一入口点，用于：
 # 1. 构建所有版本的 GKI 内核
-# 2. 获取最新的 KSU 管理器
-# 3. 收集补丁冲突文件用于调试
-# 4. 创建 GitHub Release (可选)
+# 2. 收集补丁冲突文件用于调试
+# 3. 创建 GitHub Release (可选)
 # ========================================
 
 name: 构建内核
@@ -139,13 +138,6 @@ on:
         required: false
 
 jobs:
-  # ==================== 获取管理器 ====================
-  # 下载最新的 KernelSU 管理器 APK 和 SUSFS 模块
-  get-manager:
-    if: ${{ !inputs.clean_build }}
-    uses: ./.github/workflows/get-manager.yml
-    secrets: inherit
-
   # ==================== Android 12 - 5.10 构建 ====================
   build-a12-5-10:
     if: inputs.build_a12_5_10 || inputs.build_all
@@ -164,7 +156,6 @@ jobs:
       droidspaces: ${{ inputs.droidspaces }}
       droidspaces_ntsync: ${{ inputs.droidspaces_ntsync }}
       build_bypass: ${{ inputs.build_bypass }}
-      called_from_main: true
 
   # ==================== Android 13 - 5.15 构建 ====================
   build-a13-5-15:
@@ -184,7 +175,6 @@ jobs:
       droidspaces: ${{ inputs.droidspaces }}
       droidspaces_ntsync: ${{ inputs.droidspaces_ntsync }}
       build_bypass: ${{ inputs.build_bypass }}
-      called_from_main: true
 
   # ==================== Android 14 - 6.1 构建 ====================
   build-a14-6-1:
@@ -204,7 +194,6 @@ jobs:
       droidspaces: ${{ inputs.droidspaces }}
       droidspaces_ntsync: ${{ inputs.droidspaces_ntsync }}
       build_bypass: ${{ inputs.build_bypass }}
-      called_from_main: true
 
   # ==================== Android 15 - 6.6 构建 ====================
   build-a15-6-6:
@@ -224,7 +213,6 @@ jobs:
       droidspaces: ${{ inputs.droidspaces }}
       droidspaces_ntsync: ${{ inputs.droidspaces_ntsync }}
       build_bypass: ${{ inputs.build_bypass }}
-      called_from_main: true
 
   # ==================== Android 16 - 6.12 构建 ====================
   build-a16-6-12:
@@ -244,7 +232,6 @@ jobs:
       droidspaces: ${{ inputs.droidspaces }}
       droidspaces_ntsync: ${{ inputs.droidspaces_ntsync }}
       build_bypass: ${{ inputs.build_bypass }}
-      called_from_main: true
 
   # ==================== 收集补丁冲突文件 ====================
   # 汇总所有构建任务中的 .rej 文件，方便调试补丁问题
@@ -295,7 +282,6 @@ jobs:
       contents: write
       actions: write
     needs:
-      - get-manager
       - build-a12-5-10
       - build-a13-5-15
       - build-a14-6-1
@@ -315,8 +301,6 @@ jobs:
         run: |
           if [ "${{ inputs.clean_build }}" = "true" ]; then
             KSU_NAME="Clean"
-            KSU_VER=""
-            SUS_VER=""
             RELEASE_NAME="GKI内核: Clean"
             echo "LZ4_STATUS=未开启" >> "$GITHUB_ENV"
             echo "BBG_STATUS=不支持" >> "$GITHUB_ENV"
@@ -326,18 +310,23 @@ jobs:
             echo "BRANCH_INFO=" >> "$GITHUB_ENV"
           else
             KSU_NAME="ReSukiSU"
-            KSU_VER="${{ needs.get-manager.outputs.ksuVer }}"
-            SUS_VER="${{ needs.get-manager.outputs.susVer }}"
-            if [ -z "$KSU_VER" ] || [ -z "$SUS_VER" ]; then
-              echo "::error::未获取到 KernelSU 或 SUSFS 版本，停止创建发布。"
-              exit 1
-            fi
-            RELEASE_NAME="GKI内核: ${KSU_NAME}(${KSU_VER}) & SUSFS ${SUS_VER}"
             echo "LZ4_STATUS=${{ inputs.use_zram && '开启' || '未开启' }}" >> "$GITHUB_ENV"
             echo "BBG_STATUS=${{ inputs.use_bbg && '支持' || '不支持' }}" >> "$GITHUB_ENV"
             echo "LZ4_SUFFIX=${{ inputs.use_zram && '、LZ4KD' || '' }}" >> "$GITHUB_ENV"
-            echo "HOOK_TYPE=-> SUSFS Inline Hooks" >> "$GITHUB_ENV"
-            echo "MOUNT_TYPE=-> Magic Mount 支持" >> "$GITHUB_ENV"
+
+            if [ "${{ inputs.cancel_susfs }}" = "true" ]; then
+              RELEASE_NAME="GKI内核: ${KSU_NAME}"
+              echo "SUSFS_SUFFIX=" >> "$GITHUB_ENV"
+              echo "SUSFS_STATUS=未集成 / Not included" >> "$GITHUB_ENV"
+              echo "HOOK_TYPE=" >> "$GITHUB_ENV"
+              echo "MOUNT_TYPE=" >> "$GITHUB_ENV"
+            else
+              RELEASE_NAME="GKI内核: ${KSU_NAME} & SUSFS"
+              echo "SUSFS_SUFFIX= + **SUSFS**" >> "$GITHUB_ENV"
+              echo "SUSFS_STATUS=已集成 / Included" >> "$GITHUB_ENV"
+              echo "HOOK_TYPE=-> SUSFS Inline Hooks" >> "$GITHUB_ENV"
+              echo "MOUNT_TYPE=-> Magic Mount 支持" >> "$GITHUB_ENV"
+            fi
 
             if [ -n "${{ inputs.kernelsu_branch }}" ]; then
               echo "BRANCH_INFO=(${{ inputs.kernelsu_branch }})" >> "$GITHUB_ENV"
@@ -347,9 +336,6 @@ jobs:
           fi
 
           echo "KSU_NAME=$KSU_NAME" >> "$GITHUB_ENV"
-          echo "KSU_VER=$KSU_VER" >> "$GITHUB_ENV"
-          echo "SUS_VER=$SUS_VER" >> "$GITHUB_ENV"
-          echo "KSU_SUFFIX=" >> "$GITHUB_ENV"
           echo "RELEASE_NAME=$RELEASE_NAME" >> "$GITHUB_ENV"
 
       - name: 验证构建状态
@@ -373,12 +359,6 @@ jobs:
         uses: actions/checkout@v6
         with:
           ref: ${{ github.sha }}
-
-      - name: 确定 KSU 分支
-        if: inputs.clean_build != true && inputs.kernelsu_branch != ''
-        run: |
-          BRANCH="${{ inputs.kernelsu_branch }}"
-          echo "KSU_BRANCH=$BRANCH" >> $GITHUB_ENV
 
       - name: 获取 KernelSU 提交信息
         if: inputs.clean_build != true
@@ -460,14 +440,14 @@ jobs:
           cat > release_body.md << EOF
           ## 📦 本次发布内容 / Release Contents
 
-          **${{ env.KSU_NAME }}** + **SUSFS ${{ env.SUS_VER }}**${{ env.LZ4_SUFFIX }}
+          **${{ env.KSU_NAME }}**${{ env.SUSFS_SUFFIX }}${{ env.LZ4_SUFFIX }}
 
           ### ✨ 功能特性 / Features
 
           | 组件 / Component | 状态 / Status |
           |:---|:---|
-          | ${{ env.KSU_NAME }} | ${{ env.KSU_SUFFIX }}${{ env.BRANCH_INFO }} |
-          | SUSFS | ඞ ${{ env.SUS_VER }} |
+          | ${{ env.KSU_NAME }} | ${{ env.BRANCH_INFO }} |
+          | SUSFS | ${{ env.SUSFS_STATUS }} |
           | BBG 安全补丁 | ${{ env.BBG_STATUS }} |
           | LZ4KD & ONEPLUS_LZ4K | ${{ env.LZ4_STATUS }} |
           | LZ4 | v1.10.0 ${{ env.LZ4_STATUS }} |
@@ -553,13 +533,9 @@ jobs:
       - name: 生成版本标签
         run: |
           if [ "${{ inputs.clean_build }}" = "true" ]; then
-            SUS_VERSION="clean"
+            RELEASE_SERIES="clean"
           else
-            SUS_VERSION="${{ needs.get-manager.outputs.susVer }}"
-          fi
-          if [ -z "$SUS_VERSION" ]; then
-            echo "警告: 未获取到 SUSFS 版本，使用默认版本号"
-            SUS_VERSION="1.0.0"
+            RELEASE_SERIES="resukisu"
           fi
 
           MAX_REV=0
@@ -571,8 +547,8 @@ jobs:
           )
           while IFS= read -r TAG; do
             case "$TAG" in
-              "$SUS_VERSION"-r*)
-                REVISION="${TAG#"$SUS_VERSION-r"}"
+              "$RELEASE_SERIES"-r*)
+                REVISION="${TAG#"$RELEASE_SERIES-r"}"
                 if [[ "$REVISION" =~ ^[0-9]+$ ]] && (( REVISION > MAX_REV )); then
                   MAX_REV=$REVISION
                 fi
@@ -580,7 +556,7 @@ jobs:
             esac
           done <<< "$EXISTING_TAGS"
 
-          NEW_TAG="${SUS_VERSION}-r$((MAX_REV + 1))"
+          NEW_TAG="${RELEASE_SERIES}-r$((MAX_REV + 1))"
           echo "NEW_TAG=$NEW_TAG" >> $GITHUB_ENV
 
           echo "生成标签: $NEW_TAG"
@@ -599,16 +575,6 @@ jobs:
           fi
           echo "内核包数量: $KERNEL_COUNT"
 
-          if [ "${{ inputs.clean_build }}" != "true" ]; then
-            APK_COUNT=$(find ./downloaded-artifacts -type f -name '*.apk' | wc -l)
-            SUSFS_COUNT=$(find ./downloaded-artifacts -type f -path './downloaded-artifacts/susfs-*/*' | wc -l)
-            if [ "$APK_COUNT" -eq 0 ] || [ "$SUSFS_COUNT" -eq 0 ]; then
-              echo "::error::正常发布缺少管理器 APK 或 SUSFS 模块。"
-              exit 1
-            fi
-            echo "管理器 APK: $APK_COUNT，SUSFS 模块: $SUSFS_COUNT"
-          fi
-
       - name: 创建 GitHub Release
         run: |
           PRERELEASE_FLAG=""
@@ -622,23 +588,6 @@ jobs:
             --target "$GITHUB_SHA" \
             --draft \
             $PRERELEASE_FLAG
-
-      - name: 上传管理器和 SUSFS 模块
-        if: inputs.clean_build != true
-        run: |
-          echo "准备上传 APK 与 SUSFS 模块..."
-          apk_count=$(find ./downloaded-artifacts -type f -name "*.apk" | wc -l || true)
-          sus_count=$(find ./downloaded-artifacts -type f -path "./downloaded-artifacts/susfs-*/*" | wc -l || true)
-          echo "APK files: ${apk_count}"
-          echo "SUSFS files: ${sus_count}"
-          find ./downloaded-artifacts -type f -name "*.apk" -print0 | \
-          while IFS= read -r -d '' f; do
-            gh release upload "$NEW_TAG" "$f"
-          done
-          find ./downloaded-artifacts -type f -path "./downloaded-artifacts/susfs-*/*" -print0 | \
-          while IFS= read -r -d '' f; do
-            gh release upload "$NEW_TAG" "$f"
-          done
 
       - name: 上传内核产物
         run: |

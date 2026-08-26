@@ -128,11 +128,6 @@ on:
         required: false
         type: boolean
         default: false
-      called_from_main:
-        description: "是否从 main.yml 调用（内部使用）"
-        required: false
-        type: boolean
-        default: false
 
 jobs:
   prepare-matrix:
@@ -170,9 +165,3 @@ jobs:
       droidspaces: ${{ inputs.droidspaces || 'off' }}
       droidspaces_ntsync: ${{ inputs.droidspaces_ntsync || false }}
       build_bypass: ${{ inputs.build_bypass || false }}
-
-  # 仅在直接触发时运行，从 main.yml 调用时跳过
-  get-ksu-manager:
-    if: ${{ !inputs.clean_build && !inputs.called_from_main }}
-    uses: ./.github/workflows/get-manager.yml
-    secrets: inherit

@@ -151,8 +151,3 @@ jobs:
       droidspaces: ${{ inputs.droidspaces || 'off' }}
       droidspaces_ntsync: ${{ inputs.droidspaces_ntsync || false }}
       build_bypass: ${{ inputs.build_bypass || false }}
-
-  get-ksu-manager:
-    if: ${{ !inputs.clean_build }}
-    uses: ./.github/workflows/get-manager.yml
-    secrets: inherit
