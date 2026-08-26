@@ -68,6 +68,10 @@ on:
         description: "启用 Droidspaces 容器 NTSync 支持（需启用 Droidspaces）"
         type: boolean
         default: false
+      build_bypass:
+        description: "同时构建普通内核和 Bypass 内核"
+        type: boolean
+        default: false
 
       # ==================== 功能开关 ====================
       clean_build:
@@ -159,6 +163,7 @@ jobs:
       cancel_susfs: ${{ inputs.cancel_susfs }}
       droidspaces: ${{ inputs.droidspaces }}
       droidspaces_ntsync: ${{ inputs.droidspaces_ntsync }}
+      build_bypass: ${{ inputs.build_bypass }}
       called_from_main: true
 
   # ==================== Android 13 - 5.15 构建 ====================
@@ -178,6 +183,7 @@ jobs:
       cancel_susfs: ${{ inputs.cancel_susfs }}
       droidspaces: ${{ inputs.droidspaces }}
       droidspaces_ntsync: ${{ inputs.droidspaces_ntsync }}
+      build_bypass: ${{ inputs.build_bypass }}
       called_from_main: true
 
   # ==================== Android 14 - 6.1 构建 ====================
@@ -197,6 +203,7 @@ jobs:
       cancel_susfs: ${{ inputs.cancel_susfs }}
       droidspaces: ${{ inputs.droidspaces }}
       droidspaces_ntsync: ${{ inputs.droidspaces_ntsync }}
+      build_bypass: ${{ inputs.build_bypass }}
       called_from_main: true
 
   # ==================== Android 15 - 6.6 构建 ====================
@@ -216,6 +223,7 @@ jobs:
       cancel_susfs: ${{ inputs.cancel_susfs }}
       droidspaces: ${{ inputs.droidspaces }}
       droidspaces_ntsync: ${{ inputs.droidspaces_ntsync }}
+      build_bypass: ${{ inputs.build_bypass }}
       called_from_main: true
 
   # ==================== Android 16 - 6.12 构建 ====================
@@ -235,6 +243,7 @@ jobs:
       cancel_susfs: ${{ inputs.cancel_susfs }}
       droidspaces: ${{ inputs.droidspaces }}
       droidspaces_ntsync: ${{ inputs.droidspaces_ntsync }}
+      build_bypass: ${{ inputs.build_bypass }}
       called_from_main: true
 
   # ==================== 收集补丁冲突文件 ====================

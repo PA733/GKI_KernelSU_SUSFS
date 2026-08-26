@@ -86,12 +86,17 @@ on:
         required: false
         type: boolean
         default: false
+      build_bypass:
+        required: false
+        type: boolean
+        default: false
 
 jobs:
   build-kernel:
     name: "${{ inputs.kernel_version }}.${{ inputs.sub_level }}-${{ inputs.android_version }}-${{ inputs.os_patch_level }}${{ inputs.revision && format('-{0}', inputs.revision) || '' }}-${{ inputs.clean_build && 'Clean' || inputs.ksu_variant }}"
     runs-on: ubuntu-latest
-    timeout-minutes: 60
+    # Bypass 模式包含第二次构建，并保留每次构建的超时重试空间。
+    timeout-minutes: ${{ inputs.build_bypass && 180 || 60 }}
 
     # ==================== 环境变量配置 ====================
     # ccache 配置用于加速重复编译
@@ -131,6 +136,7 @@ jobs:
           echo "Re-Kernel     : ${{ inputs.clean_build != true && inputs.use_rekernel }}"
           echo "CVE-2026-43499: ${{ inputs.clean_build != true && inputs.cve_2026_43499_patch }}"
           echo "NTSync        : ${{ inputs.clean_build != true && inputs.droidspaces != 'off' && inputs.droidspaces_ntsync }}"
+          echo "Bypass 构建   : ${{ inputs.build_bypass }}"
           echo "Stock Config  : ${{ inputs.clean_build && '禁用' || '自动检测 config/stock_defconfig' }}"
           echo "========================================"
 
@@ -267,11 +273,17 @@ jobs:
       # AnyKernel3 始终需要；清洁构建不下载不会使用的功能仓库
       - name: 克隆依赖仓库
         run: |
+          ANYKERNEL_REPO="https://github.com/ReSukiSU-GKI/AnyKernel3.git"
           ANYKERNEL_BRANCH="master"
+          if [ "${{ inputs.build_bypass }}" = "true" ]; then
+            # The bypass menu is maintained against WildKernels' GKI 2.0 tree.
+            ANYKERNEL_REPO="https://github.com/WildKernels/AnyKernel3.git"
+            ANYKERNEL_BRANCH="gki-2.0"
+          fi
           SUSFS_BRANCH="gki-${{ inputs.android_version }}-${{ inputs.kernel_version }}"
 
           echo "克隆 AnyKernel3..."
-          git clone https://github.com/ReSukiSU-GKI/AnyKernel3.git -b "master"
+          git clone "$ANYKERNEL_REPO" -b "$ANYKERNEL_BRANCH"
           rm -rf AnyKernel3/.git
 
           if [ "${{ inputs.clean_build }}" = "true" ]; then
@@ -1357,9 +1369,9 @@ jobs:
             fi
           fi
 
-      # ==================== 编译内核 ====================
-      # 使用重试机制编译内核，超时后自动重试
-      - name: 构建内核
+      # ==================== 编译普通内核 ====================
+      # 使用重试机制编译普通内核，超时后自动重试
+      - name: 构建普通内核
         uses: nick-fields/retry@v4
         with:
           timeout_minutes: 30
@@ -1391,7 +1403,9 @@ jobs:
               # 6.1+ 内核使用 Bazel 构建
               # 提取 gki_defconfig 修改到 fragment，避免 bazel trim 检查失败
               FRAG="common/arch/arm64/configs/ksu.fragment"
-              diff "$DEFCONFIG.orig" "$DEFCONFIG" | grep '^>' | sed 's/^> //; s/^[[:space:]]*//' > "$FRAG" || true
+              if [ ! -f "$FRAG" ]; then
+                diff "$DEFCONFIG.orig" "$DEFCONFIG" | grep '^>' | sed 's/^> //; s/^[[:space:]]*//' > "$FRAG" || true
+              fi
               cp "$DEFCONFIG.orig" "$DEFCONFIG"
               echo "=== KSU Fragment 内容 ==="
               cat "$FRAG"
@@ -1424,12 +1438,110 @@ jobs:
 
           cp "$SRC_DIR/Image" ./
 
+      # ==================== 激活 Bypass 构建 ====================
+      # Bypass 只放宽内核模块版本校验，普通 Image 始终保留为默认产物。
+      - name: 激活 Bypass 内核补丁
+        if: inputs.build_bypass
+        working-directory: ${{ env.KERNEL_ROOT }}
+        run: |
+          set -e
+
+          if [ -f "common/kernel/module/version.c" ] && grep -q 'bad_version:' "common/kernel/module/version.c"; then
+            TARGET_FILE="common/kernel/module/version.c"
+          elif [ -f "common/kernel/module.c" ] && grep -q 'bad_version:' "common/kernel/module.c"; then
+            TARGET_FILE="common/kernel/module.c"
+          else
+            echo "::error::未找到内核模块版本校验文件"
+            exit 1
+          fi
+
+          # 与上游实现一致：仅修改 bad_version 代码块中的第一个 return 0。
+          sed -i '/bad_version:/{:a;n;/return 0;/{s/return 0;/return 1;/;b};ba}' "$TARGET_FILE"
+
+          if ! sed -n '/bad_version:/,/return [01];/p' "$TARGET_FILE" | grep -q 'return 1;'; then
+            echo "::error::Bypass 补丁应用失败，bad_version 中未找到 return 1"
+            sed -n '/bad_version:/,/return [01];/p' "$TARGET_FILE" || true
+            exit 1
+          fi
+          echo "已启用 Bypass 内核模块版本校验绕过: $TARGET_FILE"
+
+      # ==================== 编译 Bypass 内核 ====================
+      # 使用与普通内核完全相同的构建参数，确保两个 Image 只在校验逻辑上不同。
+      - name: 构建 Bypass 内核
+        if: inputs.build_bypass
+        uses: nick-fields/retry@v4
+        with:
+          timeout_minutes: 30
+          max_attempts: 3
+          retry_on: timeout
+          command: |
+            echo "开始构建 Bypass 内核"
+            set -ex
+            cd "$KERNEL_ROOT"
+
+            sed -i 's/BUILD_SYSTEM_DLKM=1/BUILD_SYSTEM_DLKM=0/' ./common/build.config.gki.aarch64
+            sed -i '/MODULES_ORDER=android\/gki_aarch64_modules/d' ./common/build.config.gki.aarch64
+            sed -i '/KMI_SYMBOL_LIST_STRICT_MODE/d' ./common/build.config.gki.aarch64
+
+            if [ -f "build/build.sh" ]; then
+              # 5.x 内核使用传统构建脚本
+              LTO=thin BUILD_CONFIG=common/build.config.gki.aarch64 build/build.sh CC="/usr/bin/ccache clang" || exit 1
+              strings "out/${{ inputs.android_version }}-${{ inputs.kernel_version }}/dist/Image" | grep 'Linux version'
+            else
+              # 6.1+ 内核使用 Bazel 构建
+              FRAG="common/arch/arm64/configs/ksu.fragment"
+              if [ ! -f "$FRAG" ]; then
+                echo "::error::普通构建未生成 KSU 配置 fragment: $FRAG"
+                exit 1
+              fi
+              cp "$DEFCONFIG.orig" "$DEFCONFIG"
+              echo "=== Bypass KSU Fragment 内容 ==="
+              cat "$FRAG"
+              echo "================================"
+              FRAG_FLAG=""
+              if [ -s "$FRAG" ]; then
+                FRAG_FLAG="--defconfig_fragment=//common:arch/arm64/configs/ksu.fragment"
+              fi
+              LTO_FLAG="--lto=thin"
+              if [ "${{ inputs.kernel_version }}" = "6.12" ]; then
+                LTO_FLAG="--lto=none"
+              fi
+              tools/bazel build --disk_cache=/home/runner/.cache/bazel --config=fast $LTO_FLAG $FRAG_FLAG //common:kernel_aarch64_dist || exit 1
+              strings ./bazel-bin/common/kernel_aarch64/Image | grep 'Linux version'
+            fi
+
+            echo "Bypass 内核构建完成"
+
+      # ==================== 准备 Bypass Image ====================
+      - name: 准备 Bypass 内核 Image
+        if: inputs.build_bypass
+        run: |
+          if [ "${{ inputs.android_version }}" == "android12" ] || [ "${{ inputs.android_version }}" == "android13" ]; then
+            SRC_DIR="$KERNEL_ROOT/out/${{ inputs.android_version }}-${{ inputs.kernel_version }}/dist"
+          else
+            SRC_DIR="$KERNEL_ROOT/bazel-bin/common/kernel_aarch64"
+          fi
+
+          if [ ! -f "$SRC_DIR/Image" ]; then
+            echo "::error::未找到 Bypass 构建产物: $SRC_DIR/Image"
+            exit 1
+          fi
+          cp "$SRC_DIR/Image" ./Bypass-Image
+
       # ==================== 创建 AnyKernel3 压缩包 ====================
       - name: 创建 AnyKernel3 压缩包
         run: |
           cd $ANYKERNEL3
           ZIP_NAME="${CONFIG}-${BUILD_VARIANT}-AnyKernel3.zip"
           mv ../Image ./Image
+          if [ "${{ inputs.build_bypass }}" = "true" ]; then
+            if [ ! -f "../Bypass-Image" ]; then
+              echo "::error::未找到 Bypass-Image，停止打包"
+              exit 1
+            fi
+            mv ../Bypass-Image ./Bypass-Image
+            patch -p1 --forward < "$GITHUB_WORKSPACE/.github/patches/bypass.patch"
+          fi
           zip -r "../$ZIP_NAME" ./*
 
       # ==================== 构建 Boot 镜像 (Android 12) ====================

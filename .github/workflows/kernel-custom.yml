@@ -120,6 +120,11 @@ on:
         required: false
         type: boolean
         default: false
+      build_bypass:
+        description: "同时构建普通内核和 Bypass 内核"
+        required: false
+        type: boolean
+        default: false
 
 jobs:
   build-custom-kernel:
@@ -145,6 +150,7 @@ jobs:
       enable_susfs: ${{ !inputs.cancel_susfs }}
       droidspaces: ${{ inputs.droidspaces || 'off' }}
       droidspaces_ntsync: ${{ inputs.droidspaces_ntsync || false }}
+      build_bypass: ${{ inputs.build_bypass || false }}
 
   get-ksu-manager:
     if: ${{ !inputs.clean_build }}
