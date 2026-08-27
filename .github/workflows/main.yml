@@ -533,9 +533,14 @@ jobs:
       - name: 生成版本标签
         run: |
           if [ "${{ inputs.clean_build }}" = "true" ]; then
-            RELEASE_SERIES="clean"
+            SUS_VERSION="clean"
           else
-            RELEASE_SERIES="resukisu"
+            SUSFS_INFO_URL="https://gitlab.com/simonpunk/susfs4ksu/-/raw/gki-android14-6.1/ksu_module_susfs/module.prop?ref_type=heads"
+            SUS_VERSION=$(curl --fail --silent --show-error "$SUSFS_INFO_URL" | awk -F '=' '$1 == "version" { print $2; exit }' || true)
+          fi
+          if [ -z "$SUS_VERSION" ]; then
+            echo "警告: 未获取到 SUSFS 版本，使用默认版本号"
+            SUS_VERSION="1.0.0"
           fi
 
           MAX_REV=0
@@ -547,8 +552,8 @@ jobs:
           )
           while IFS= read -r TAG; do
             case "$TAG" in
-              "$RELEASE_SERIES"-r*)
-                REVISION="${TAG#"$RELEASE_SERIES-r"}"
+              "$SUS_VERSION"-r*)
+                REVISION="${TAG#"$SUS_VERSION-r"}"
                 if [[ "$REVISION" =~ ^[0-9]+$ ]] && (( REVISION > MAX_REV )); then
                   MAX_REV=$REVISION
                 fi
@@ -556,7 +561,7 @@ jobs:
             esac
           done <<< "$EXISTING_TAGS"
 
-          NEW_TAG="${RELEASE_SERIES}-r$((MAX_REV + 1))"
+          NEW_TAG="${SUS_VERSION}-r$((MAX_REV + 1))"
           echo "NEW_TAG=$NEW_TAG" >> $GITHUB_ENV
 
           echo "生成标签: $NEW_TAG"
