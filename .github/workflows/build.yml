@@ -1601,7 +1601,12 @@ jobs:
                 echo "启用 Image-only system_dlkm 兼容模式: --notrim"
                 NOTRIM_FLAG="--notrim"
               fi
-              tools/bazel build --disk_cache=/home/runner/.cache/bazel --config=fast $LTO_FLAG $NOTRIM_FLAG $FRAG_FLAG //common:kernel_aarch64_dist || exit 1
+              STAMP_FLAG=""
+              if [ "${{ inputs.pixel_a9_compat }}" = "true" ]; then
+                echo "Pixel A9 mode: enabling Kleaf SCM stamping"
+                STAMP_FLAG="--config=stamp"
+              fi
+              tools/bazel build --disk_cache=/home/runner/.cache/bazel --config=fast $STAMP_FLAG $LTO_FLAG $NOTRIM_FLAG $FRAG_FLAG //common:kernel_aarch64_dist || exit 1
               strings ./bazel-bin/common/kernel_aarch64/Image | grep 'Linux version'
             fi
 
@@ -1739,10 +1744,13 @@ jobs:
           LTO_FLAG="--lto=thin"
           [ "${{ inputs.kernel_version }}" = "6.12" ] && LTO_FLAG="--lto=none"
 
+          STAMP_FLAG=""
+          [ "${{ inputs.pixel_a9_compat }}" = "true" ] && STAMP_FLAG="--config=stamp"
+
           DIST_DIR="$GITHUB_WORKSPACE/gki-dist/$CONFIG"
           mkdir -p "$DIST_DIR"
           tools/bazel run --disk_cache=/home/runner/.cache/bazel --config=fast \
-            $LTO_FLAG $FRAG_FLAG //common:kernel_aarch64_dist -- --destdir="$DIST_DIR"
+            $STAMP_FLAG $LTO_FLAG $FRAG_FLAG //common:kernel_aarch64_dist -- --destdir="$DIST_DIR"
 
           echo "=== matching GKI dist ==="
           find "$DIST_DIR" -maxdepth 1 -type f -printf '%f\n' | sort
@@ -1825,7 +1833,12 @@ jobs:
                 echo "启用 Image-only system_dlkm 兼容模式: --notrim"
                 NOTRIM_FLAG="--notrim"
               fi
-              tools/bazel build --disk_cache=/home/runner/.cache/bazel --config=fast $LTO_FLAG $NOTRIM_FLAG $FRAG_FLAG //common:kernel_aarch64_dist || exit 1
+              STAMP_FLAG=""
+              if [ "${{ inputs.pixel_a9_compat }}" = "true" ]; then
+                echo "Pixel A9 mode: enabling Kleaf SCM stamping for g5c5f2fea42dd-ab15835541"
+                STAMP_FLAG="--config=stamp"
+              fi
+              tools/bazel build --disk_cache=/home/runner/.cache/bazel --config=fast $STAMP_FLAG $LTO_FLAG $NOTRIM_FLAG $FRAG_FLAG //common:kernel_aarch64_dist || exit 1
               strings ./bazel-bin/common/kernel_aarch64/Image | grep 'Linux version'
             fi
 
