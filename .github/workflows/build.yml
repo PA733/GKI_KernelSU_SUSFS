@@ -1791,7 +1791,7 @@ jobs:
 
       # ==================== 上传匹配 GKI 分发文件 ====================
       - name: 上传匹配 GKI 分发文件
-        if: inputs.build_matching_system_dlkm
+        if: inputs.build_matching_system_dlkm && inputs.kernel_version != '5.10' && inputs.kernel_version != '5.15'
         uses: actions/upload-artifact@v6
         with:
           name: ${{ env.BUILD_VARIANT }}_kernel-${{ env.CONFIG }}-gki-dist
