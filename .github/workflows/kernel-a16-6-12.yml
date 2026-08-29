@@ -1,5 +1,8 @@
 name: 内核构建 - Android 16 (6.12)
 
+# Android 16 / 6.12 KMI generation is derived from the synced AOSP source by build.yml.
+# Do not hard-code the generation in this entry workflow.
+
 # 适配 Node.js 24
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
