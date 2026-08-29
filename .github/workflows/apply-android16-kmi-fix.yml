@@ -25,17 +25,18 @@ jobs:
 
           path = Path('.github/workflows/build.yml')
           s = path.read_text()
+          gh = '$' + '{{'
 
           anchor = '''          $REPO --trace sync -c -j$(nproc --all) --no-tags --fail-fast
           echo "REMOTE_BRANCH=$REMOTE_BRANCH" >> $GITHUB_ENV
 '''
-          insert = anchor + '''
+          insert = (anchor + '''
       # ==================== 检测 AOSP KMI Generation ====================
       # Android 16 / 6.12 的 KMI generation 由实际同步的 AOSP 源码决定，
       # 避免工作流中的硬编码 generation 与 vendor modules 的 KMI 不一致。
       - name: 检测 AOSP KMI Generation
-        if: inputs.android_version == 'android16' && inputs.kernel_version == '6.12'
-        working-directory: ${{ env.KERNEL_ROOT }}
+        if: __GH__ inputs.android_version == 'android16' && inputs.kernel_version == '6.12' }}
+        working-directory: __GH__ env.KERNEL_ROOT }}
         shell: bash
         run: |
           set -euo pipefail
@@ -68,7 +69,7 @@ jobs:
             echo "KMI_GENERATION=$KMI_GENERATION"
             echo "KMI_TAG=$KMI_TAG"
           } >> "$GITHUB_ENV"
-'''
+''').replace('__GH__', gh)
           if s.count(anchor) != 1:
               raise SystemExit(f'expected one source-sync anchor, found {s.count(anchor)}')
           s = s.replace(anchor, insert, 1)
@@ -87,22 +88,22 @@ jobs:
 '''
           new = '''            # 配置 6.1+ 内核
             # 清洁构建保留 GKI KMI/ABI 检查，使其可作为 vendor module 兼容性基准。
-            if [ "${{ inputs.clean_build }}" != "true" ]; then
+            if [ "__GH__ inputs.clean_build }}" != "true" ]; then
               sed -i '/^[[:space:]]*"protected_exports_list"[[:space:]]*:[[:space:]]*"android\\/abi_gki_protected_exports_aarch64",$/d' ./common/BUILD.bazel
               sed -i '/kmi_symbol_list_strict_mode/d' ./common/BUILD.bazel
               rm -rf ./common/android/abi_gki_protected_exports_*
             fi
             sed -i "/stable_scmversion_cmd/s/-maybe-dirty//g" ./build/kernel/kleaf/impl/stamp.bzl
-'''
+'''.replace('__GH__', gh)
           if s.count(old) != 1:
               raise SystemExit(f'expected one ABI enforcement block, found {s.count(old)}')
           s = s.replace(old, new, 1)
 
           strict = "            sed -i '/KMI_SYMBOL_LIST_STRICT_MODE/d' ./common/build.config.gki.aarch64\n"
-          strict_new = '''            if [ "${{ inputs.clean_build }}" != "true" ]; then
+          strict_new = '''            if [ "__GH__ inputs.clean_build }}" != "true" ]; then
               sed -i '/KMI_SYMBOL_LIST_STRICT_MODE/d' ./common/build.config.gki.aarch64
             fi
-'''
+'''.replace('__GH__', gh)
           if s.count(strict) != 2:
               raise SystemExit(f'expected two strict-mode removals, found {s.count(strict)}')
           s = s.replace(strict, strict_new)
@@ -115,7 +116,7 @@ jobs:
 
       # ==================== 验证 Android 16 KMI ====================
       - name: 验证 Android 16 KMI
-        if: inputs.android_version == 'android16' && inputs.kernel_version == '6.12'
+        if: __GH__ inputs.android_version == 'android16' && inputs.kernel_version == '6.12' }}
         shell: bash
         run: |
           set -euo pipefail
@@ -140,7 +141,7 @@ jobs:
           fi
 
       # ==================== 准备内核 Image ====================
-'''
+'''.replace('__GH__', gh)
           if s.count(anchor) != 1:
               raise SystemExit(f'expected one post-build anchor, found {s.count(anchor)}')
           s = s.replace(anchor, insert, 1)
@@ -161,6 +162,6 @@ jobs:
           rm -f .github/kmi-patch-trigger
           git config user.name "PA733 CI patch helper"
           git config user.email "actions@github.com"
-          git add .github/workflows/build.yml .github/workflows/apply-android16-kmi-fix.yml .github/kmi-patch-trigger
+          git add -A .github/workflows/build.yml .github/workflows/apply-android16-kmi-fix.yml .github/kmi-patch-trigger
           git commit -m "build: derive Android 16 KMI generation from AOSP source"
           git push origin HEAD:fix/android16-kmi-generation
