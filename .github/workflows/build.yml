@@ -1543,6 +1543,18 @@ jobs:
             fi
           fi
 
+      # ==================== 准备内核 Image ====================
+      # 复制编译产物到工作目录，供 AnyKernel3 打包使用
+      - name: 准备内核 Image
+        run: |
+          if [ "${{ inputs.android_version }}" == "android12" ] || [ "${{ inputs.android_version }}" == "android13" ]; then
+            SRC_DIR="$KERNEL_ROOT/out/${{ inputs.android_version }}-${{ inputs.kernel_version }}/dist"
+          else
+            SRC_DIR="$KERNEL_ROOT/bazel-bin/common/kernel_aarch64"
+          fi
+
+          cp "$SRC_DIR/Image" ./
+
       # ==================== 构建匹配的 GKI system_dlkm 分发 ====================
       - name: 构建匹配的 GKI system_dlkm 分发
         if: inputs.build_matching_system_dlkm && inputs.kernel_version != '5.10' && inputs.kernel_version != '5.15'
@@ -1568,18 +1580,6 @@ jobs:
 
           echo "=== matching GKI dist ==="
           find "$DIST_DIR" -maxdepth 1 -type f -printf '%f\n' | sort
-
-      # ==================== 准备内核 Image ====================
-      # 复制编译产物到工作目录，供 AnyKernel3 打包使用
-      - name: 准备内核 Image
-        run: |
-          if [ "${{ inputs.android_version }}" == "android12" ] || [ "${{ inputs.android_version }}" == "android13" ]; then
-            SRC_DIR="$KERNEL_ROOT/out/${{ inputs.android_version }}-${{ inputs.kernel_version }}/dist"
-          else
-            SRC_DIR="$KERNEL_ROOT/bazel-bin/common/kernel_aarch64"
-          fi
-
-          cp "$SRC_DIR/Image" ./
 
       # ==================== 激活 Bypass 构建 ====================
       # Bypass 只放宽内核模块版本校验，普通 Image 始终保留为默认产物。
