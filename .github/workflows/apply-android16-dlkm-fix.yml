@@ -18,19 +18,20 @@ jobs:
           ref: fix/android16-system-dlkm-compat
           fetch-depth: 0
 
-      - name: Patch shared build workflow
-        run: python3 .github/scripts/apply_android16_dlkm_fix.py
+      - name: Generate patched build workflow blob
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 .github/scripts/apply_android16_dlkm_fix.py
+          cp .github/workflows/build.yml .github/build.android16-dlkm.generated.yml
+          git checkout -- .github/workflows/build.yml
 
-      - name: Commit patched workflow and remove helper
+      - name: Publish temporary generated blob
         shell: bash
         run: |
           set -euo pipefail
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git rm .github/workflows/apply-android16-dlkm-fix.yml
-          git rm .github/scripts/apply_android16_dlkm_fix.py
-          git add .github/workflows/build.yml
-          git commit -m "build: add Android 16 system_dlkm compatibility modes"
+          git add .github/build.android16-dlkm.generated.yml
+          git commit -m "ci: publish generated Android 16 build workflow blob"
           git push origin HEAD:fix/android16-system-dlkm-compat
-
-# one-shot patch runner; this file removes itself after a successful run
