@@ -1605,6 +1605,21 @@ jobs:
               if [ "${{ inputs.pixel_a9_compat }}" = "true" ]; then
                 echo "Pixel A9 mode: enabling Kleaf SCM stamping"
                 STAMP_FLAG="--config=stamp"
+
+                # Kleaf's stamped SCM version appends -dirty when tracked files in
+                # common were intentionally edited by this build. Hide only those
+                # tracked edits from Git status; the modified contents are still
+                # what Bazel compiles and HEAD remains the pinned stock commit.
+                mapfile -d '' PIXEL_DIRTY_TRACKED < <(git -C common diff --name-only -z)
+                if [ "${#PIXEL_DIRTY_TRACKED[@]}" -gt 0 ]; then
+                  printf 'Pixel A9: suppressing intentional dirty status for %d tracked common files\n' "${#PIXEL_DIRTY_TRACKED[@]}"
+                  printf '%s\0' "${PIXEL_DIRTY_TRACKED[@]}" | git -C common update-index --assume-unchanged -z --stdin
+                fi
+                if [ -n "$(git -C common status -uno --porcelain)" ]; then
+                  echo "::error::Pixel A9 common tree is still dirty after suppressing intentional tracked edits"
+                  git -C common status -uno --porcelain
+                  exit 1
+                fi
               fi
               tools/bazel build --disk_cache=/home/runner/.cache/bazel --config=fast $STAMP_FLAG $LTO_FLAG $NOTRIM_FLAG $FRAG_FLAG //common:kernel_aarch64_dist || exit 1
               strings ./bazel-bin/common/kernel_aarch64/Image | grep 'Linux version'
