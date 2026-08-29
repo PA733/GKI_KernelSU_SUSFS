@@ -1,21 +1,21 @@
 name: Apply Android 16 KMI workflow fix
 
 on:
-  pull_request:
-    branches: [main]
+  push:
+    branches:
+      - fix/android16-kmi-generation
 
 permissions:
   contents: write
 
 jobs:
   apply-fix:
-    if: github.event.pull_request.head.repo.full_name == github.repository && github.head_ref == 'fix/android16-kmi-generation'
     runs-on: ubuntu-latest
     steps:
-      - name: Check out PR branch
+      - name: Check out patch branch
         uses: actions/checkout@v6
         with:
-          ref: ${{ github.head_ref }}
+          ref: fix/android16-kmi-generation
           fetch-depth: 0
 
       - name: Patch shared build workflow
@@ -168,7 +168,7 @@ jobs:
           PY
 
           # This helper exists only to apply the exact patch through GitHub's
-          # PR runner. Remove it from the resulting branch/PR.
+          # runner. Remove it from the resulting branch/PR.
           git rm .github/workflows/apply-android16-kmi-fix.yml
 
       - name: Commit patched workflow
@@ -185,4 +185,4 @@ jobs:
           fi
 
           git commit -m "build: derive Android 16 KMI generation from AOSP source"
-          git push origin HEAD:${{ github.head_ref }}
+          git push origin HEAD:fix/android16-kmi-generation
