@@ -1,16 +1,15 @@
 name: Apply Android 16 KMI fix
 
 on:
-  pull_request:
+  push:
     branches:
-      - main
+      - fix/android16-kmi-generation
 
 permissions:
   contents: write
 
 jobs:
   apply:
-    if: github.head_ref == 'fix/android16-kmi-generation'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
@@ -159,8 +158,9 @@ jobs:
         shell: bash
         run: |
           rm .github/workflows/apply-android16-kmi-fix.yml
+          rm -f .github/kmi-patch-trigger
           git config user.name "PA733 CI patch helper"
           git config user.email "actions@github.com"
-          git add .github/workflows/build.yml .github/workflows/apply-android16-kmi-fix.yml
+          git add .github/workflows/build.yml .github/workflows/apply-android16-kmi-fix.yml .github/kmi-patch-trigger
           git commit -m "build: derive Android 16 KMI generation from AOSP source"
           git push origin HEAD:fix/android16-kmi-generation
