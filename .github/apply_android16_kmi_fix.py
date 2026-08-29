@@ -1,0 +1,122 @@
+from pathlib import Path
+
+path = Path('.github/workflows/build.yml')
+s = path.read_text()
+gh = '$' + '{{'
+
+anchor = '''          $REPO --trace sync -c -j$(nproc --all) --no-tags --fail-fast
+          echo "REMOTE_BRANCH=$REMOTE_BRANCH" >> $GITHUB_ENV
+'''
+insert = (anchor + '''
+      # ==================== 检测 AOSP KMI Generation ====================
+      # Android 16 / 6.12 的 KMI generation 由实际同步的 AOSP 源码决定，
+      # 避免工作流中的硬编码 generation 与 vendor modules 的 KMI 不一致。
+      - name: 检测 AOSP KMI Generation
+        if: __GH__ inputs.android_version == 'android16' && inputs.kernel_version == '6.12' }}
+        working-directory: __GH__ env.KERNEL_ROOT }}
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          CONSTANTS="common/build.config.constants"
+          if [ ! -f "$CONSTANTS" ]; then
+            echo "::error::找不到 $CONSTANTS，无法确定 KMI generation"
+            exit 1
+          fi
+
+          AOSP_BRANCH="$(sed -n 's/^BRANCH=//p' "$CONSTANTS" | head -n1)"
+          KMI_GENERATION="$(sed -n 's/^KMI_GENERATION=//p' "$CONSTANTS" | head -n1)"
+          CLANG_VERSION="$(sed -n 's/^CLANG_VERSION=//p' "$CONSTANTS" | head -n1)"
+
+          if [ -z "$AOSP_BRANCH" ] || [ -z "$KMI_GENERATION" ]; then
+            echo "::error::无法从 $CONSTANTS 读取 BRANCH/KMI_GENERATION"
+            exit 1
+          fi
+
+          ANDROID_RELEASE="${AOSP_BRANCH%%-*}"
+          KMI_TAG="${ANDROID_RELEASE}-${KMI_GENERATION}"
+
+          echo "AOSP branch    : $AOSP_BRANCH"
+          echo "KMI generation : $KMI_GENERATION"
+          echo "KMI tag        : $KMI_TAG"
+          echo "Clang version  : ${CLANG_VERSION:-unknown}"
+
+          {
+            echo "AOSP_BRANCH=$AOSP_BRANCH"
+            echo "KMI_GENERATION=$KMI_GENERATION"
+            echo "KMI_TAG=$KMI_TAG"
+          } >> "$GITHUB_ENV"
+''').replace('__GH__', gh)
+assert s.count(anchor) == 1, f'source-sync anchor count={s.count(anchor)}'
+s = s.replace(anchor, insert, 1)
+
+old = '              "android16-6.12") KMI_TAG="android16-5" ;;'
+new = '              "android16-6.12") KMI_TAG="${KMI_TAG:?KMI_TAG was not detected from AOSP source}" ;;'
+assert s.count(old) == 2, f'android16-5 mapping count={s.count(old)}'
+s = s.replace(old, new)
+
+old = '''            # 配置 6.1+ 内核
+            sed -i '/^[[:space:]]*"protected_exports_list"[[:space:]]*:[[:space:]]*"android\\/abi_gki_protected_exports_aarch64",$/d' ./common/BUILD.bazel
+            sed -i '/kmi_symbol_list_strict_mode/d' ./common/BUILD.bazel
+            rm -rf ./common/android/abi_gki_protected_exports_*
+            sed -i "/stable_scmversion_cmd/s/-maybe-dirty//g" ./build/kernel/kleaf/impl/stamp.bzl
+'''
+new = '''            # 配置 6.1+ 内核
+            # 清洁构建保留 GKI KMI/ABI 检查，使其可作为 vendor module 兼容性基准。
+            if [ "__GH__ inputs.clean_build }}" != "true" ]; then
+              sed -i '/^[[:space:]]*"protected_exports_list"[[:space:]]*:[[:space:]]*"android\\/abi_gki_protected_exports_aarch64",$/d' ./common/BUILD.bazel
+              sed -i '/kmi_symbol_list_strict_mode/d' ./common/BUILD.bazel
+              rm -rf ./common/android/abi_gki_protected_exports_*
+            fi
+            sed -i "/stable_scmversion_cmd/s/-maybe-dirty//g" ./build/kernel/kleaf/impl/stamp.bzl
+'''.replace('__GH__', gh)
+assert s.count(old) == 1, f'ABI block count={s.count(old)}'
+s = s.replace(old, new, 1)
+
+strict = "            sed -i '/KMI_SYMBOL_LIST_STRICT_MODE/d' ./common/build.config.gki.aarch64\n"
+strict_new = '''            if [ "__GH__ inputs.clean_build }}" != "true" ]; then
+              sed -i '/KMI_SYMBOL_LIST_STRICT_MODE/d' ./common/build.config.gki.aarch64
+            fi
+'''.replace('__GH__', gh)
+assert s.count(strict) == 2, f'strict removal count={s.count(strict)}'
+s = s.replace(strict, strict_new)
+
+anchor = '''            echo "构建完成: $BUILD_VARIANT"
+
+      # ==================== 准备内核 Image ====================
+'''
+insert = '''            echo "构建完成: $BUILD_VARIANT"
+
+      # ==================== 验证 Android 16 KMI ====================
+      - name: 验证 Android 16 KMI
+        if: __GH__ inputs.android_version == 'android16' && inputs.kernel_version == '6.12' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          IMAGE="$KERNEL_ROOT/bazel-bin/common/kernel_aarch64/Image"
+          if [ ! -f "$IMAGE" ]; then
+            echo "::error::找不到构建产物: $IMAGE"
+            exit 1
+          fi
+
+          VERSION="$(strings "$IMAGE" | grep -m1 'Linux version')"
+          echo "$VERSION"
+
+          if [ -z "${KMI_GENERATION:-}" ]; then
+            echo "::error::KMI_GENERATION 未设置"
+            exit 1
+          fi
+
+          if ! grep -q -- "-android16-${KMI_GENERATION}" <<< "$VERSION"; then
+            echo "::error::Kernel release 与 AOSP KMI generation 不一致；期望 android16-${KMI_GENERATION}"
+            exit 1
+          fi
+
+      # ==================== 准备内核 Image ====================
+'''.replace('__GH__', gh)
+assert s.count(anchor) == 1, f'post-build anchor count={s.count(anchor)}'
+s = s.replace(anchor, insert, 1)
+
+assert 'android16-5' not in s, 'stale android16-5 string remains'
+path.write_text(s)
