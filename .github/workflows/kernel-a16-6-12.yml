@@ -82,6 +82,16 @@ on:
         required: false
         type: boolean
         default: false
+      image_only_compat:
+        description: "Image-only 兼容模式：使用 --notrim 兼容设备现有 system_dlkm"
+        required: false
+        type: boolean
+        default: true
+      build_matching_system_dlkm:
+        description: "额外导出与当前内核匹配的 GKI/system_dlkm 分发文件"
+        required: false
+        type: boolean
+        default: false
   workflow_call:
     inputs:
       clean_build:
@@ -131,6 +141,14 @@ on:
         required: false
         type: boolean
         default: false
+      image_only_compat:
+        required: false
+        type: boolean
+        default: true
+      build_matching_system_dlkm:
+        required: false
+        type: boolean
+        default: false
 
 jobs:
   prepare-matrix:
@@ -168,3 +186,5 @@ jobs:
       droidspaces: ${{ inputs.droidspaces || 'off' }}
       droidspaces_ntsync: ${{ inputs.droidspaces_ntsync || false }}
       build_bypass: ${{ inputs.build_bypass || false }}
+      image_only_compat: ${{ inputs.image_only_compat }}
+      build_matching_system_dlkm: ${{ inputs.build_matching_system_dlkm }}
