@@ -28,3 +28,4 @@ jobs:
           git add .github/workflows/build.yml .github/workflows/_apply-pixel-a9-normal-clean-stamp.yml .github/scripts/apply_pixel_a9_normal_clean_stamp.py
           git commit -m "build: clean Pixel A9 SCM stamp in normal build"
           git push origin HEAD:fix/pixel-a9-normal-clean-stamp
+# retrigger exact normal block matcher
