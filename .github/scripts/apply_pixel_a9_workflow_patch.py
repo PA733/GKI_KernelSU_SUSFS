@@ -1,0 +1,65 @@
+#!/usr/bin/env python3
+from pathlib import Path
+
+p = Path('.github/workflows/build.yml')
+s = p.read_text()
+
+
+def replace_once(old: str, new: str, label: str) -> None:
+    global s
+    count = s.count(old)
+    if count != 1:
+        raise SystemExit(f'{label}: expected exactly one match, found {count}')
+    s = s.replace(old, new, 1)
+
+replace_once(
+'''      build_matching_system_dlkm:\n        description: "Also export a matching GKI distribution including system_dlkm artifacts"\n        required: false\n        type: boolean\n        default: false\n''',
+'''      build_matching_system_dlkm:\n        description: "Also export a matching GKI distribution including system_dlkm artifacts"\n        required: false\n        type: boolean\n        default: false\n      pixel_a9_compat:\n        description: "Reproduce the Pixel 11 A9 production GKI snapshot and trust its stock protected system_dlkm modules"\n        required: false\n        type: boolean\n        default: false\n''',
+'workflow input')
+
+replace_once(
+'''          echo "匹配 system_dlkm: ${{ inputs.build_matching_system_dlkm }}"\n          echo "Stock Config  : ${{ inputs.clean_build && '禁用' || '自动检测 config/stock_defconfig' }}"\n''',
+'''          echo "匹配 system_dlkm: ${{ inputs.build_matching_system_dlkm }}"\n          echo "Pixel A9 兼容 : ${{ inputs.pixel_a9_compat }}"\n          echo "Stock Config  : ${{ inputs.clean_build && '禁用' || '自动检测 config/stock_defconfig' }}"\n''',
+'build summary')
+
+replace_once(
+'''          FORMATTED_BRANCH="${{ inputs.android_version }}-${{ inputs.kernel_version }}-${{ inputs.os_patch_level }}"\n          echo "初始化 repo，分支: common-${FORMATTED_BRANCH}"\n''',
+'''          FORMATTED_BRANCH="${{ inputs.android_version }}-${{ inputs.kernel_version }}-${{ inputs.os_patch_level }}"\n          if [ "${{ inputs.pixel_a9_compat }}" = "true" ]; then\n            if [ "${{ inputs.android_version }}" != "android16" ] || [ "${{ inputs.kernel_version }}" != "6.12" ] || [ "${{ inputs.sub_level }}" != "69" ]; then\n              echo "::error::Pixel A9 compatibility mode requires android16 / 6.12.69"\n              exit 1\n            fi\n            # The production snapshot was published through the Android 16 / 6.12 superproject line.\n            FORMATTED_BRANCH="android16-6.12-sp"\n          fi\n          echo "初始化 repo，分支: common-${FORMATTED_BRANCH}"\n''',
+'manifest branch selection')
+
+replace_once(
+'''          $REPO --trace sync -c -j$(nproc --all) --no-tags --fail-fast\n          echo "REMOTE_BRANCH=$REMOTE_BRANCH" >> $GITHUB_ENV\n\n      # ==================== 检测 AOSP KMI Generation ====================\n''',
+'''          $REPO --trace sync -c -j$(nproc --all) --no-tags --fail-fast\n          echo "REMOTE_BRANCH=$REMOTE_BRANCH" >> $GITHUB_ENV\n\n      # ==================== Pixel 11 A9 production snapshot ====================\n      - name: Pin Pixel A9 production snapshot\n        if: inputs.pixel_a9_compat\n        working-directory: ${{ env.KERNEL_ROOT }}\n        shell: bash\n        run: |\n          set -euo pipefail\n\n          PIXEL_SUPERPROJECT="f9247d91f1837638162624a76f0df94f429f3dda"\n          PIXEL_COMMON="5c5f2fea42dd4cc5ae1002945d86e305c09d3262"\n          PIXEL_BUILD="23058b8ede5aa6e1a3bb075be80290ecf44cb17c"\n          PIXEL_CLANG="77c95e8253c2c82ffd4fee92c0ad9f5ac1e8ca04"\n          PIXEL_RUST="5c78b1e636b2bf68d46a6980437590fddca64147"\n\n          SUPER_DIR="$RUNNER_TEMP/pixel-a9-superproject"\n          rm -rf "$SUPER_DIR"\n          git init -q "$SUPER_DIR"\n          git -C "$SUPER_DIR" fetch -q https://android.googlesource.com/kernel/superproject "$PIXEL_SUPERPROJECT"\n          git -C "$SUPER_DIR" checkout -q --detach FETCH_HEAD\n\n          # Apply every gitlink from the exact production superproject snapshot to\n          # the repo-synced checkout. This pins build tools and common modules too,\n          # instead of mixing the stock common SHA with today's dependencies.\n          while read -r mode type sha path; do\n            [ "$mode" = "160000" ] || continue\n            if ! git -C "$path" rev-parse --git-dir >/dev/null 2>&1; then\n              echo "Skipping superproject path not present in this manifest: $path"\n              continue\n            fi\n            remote="$(git -C "$path" remote | head -n1)"\n            if [ -z "$remote" ]; then\n              echo "::error::No remote found for superproject path: $path"\n              exit 1\n            fi\n            echo "Pinning $path -> $sha"\n            git -C "$path" fetch -q "$remote" "$sha"\n            git -C "$path" checkout -q --detach "$sha"\n          done < <(git -C "$SUPER_DIR" ls-tree -r "$PIXEL_SUPERPROJECT")\n\n          assert_rev() {\n            local path="$1" expected="$2" actual\n            actual="$(git -C "$path" rev-parse HEAD)"\n            echo "$path = $actual"\n            if [ "$actual" != "$expected" ]; then\n              echo "::error::$path revision mismatch; expected $expected"\n              exit 1\n            fi\n          }\n\n          assert_rev common "$PIXEL_COMMON"\n          assert_rev build/kernel "$PIXEL_BUILD"\n          assert_rev prebuilts/clang/host/linux-x86 "$PIXEL_CLANG"\n          assert_rev prebuilts/rust "$PIXEL_RUST"\n\n          grep -q '^SUBLEVEL = 69$' common/Makefile || { echo "::error::Pixel A9 common is not 6.12.69"; exit 1; }\n          grep -q '^KMI_GENERATION=6$' common/build.config.constants || { echo "::error::Pixel A9 common is not KMI generation 6"; exit 1; }\n          grep -q '^CLANG_VERSION=r536225$' common/build.config.constants || { echo "::error::Pixel A9 common does not use r536225"; exit 1; }\n\n          {\n            echo "PIXEL_A9_SUPERPROJECT=$PIXEL_SUPERPROJECT"\n            echo "PIXEL_A9_COMMON=$PIXEL_COMMON"\n            echo "BUILD_NUMBER=15835541"\n          } >> "$GITHUB_ENV"\n\n      # ==================== 检测 AOSP KMI Generation ====================\n''',
+'pixel production pin step')
+
+replace_once(
+'''      - name: 备份原始构建配置\n        run: |\n          cp "$DEFCONFIG" "$DEFCONFIG.orig"\n          cp "$KERNEL_ROOT/common/build.config.gki.aarch64" "$KERNEL_ROOT/common/build.config.gki.aarch64.orig"\n\n      - name: 集成 Droidspaces 支持\n''',
+'''      - name: 备份原始构建配置\n        run: |\n          cp "$DEFCONFIG" "$DEFCONFIG.orig"\n          cp "$KERNEL_ROOT/common/build.config.gki.aarch64" "$KERNEL_ROOT/common/build.config.gki.aarch64.orig"\n\n      - name: Trust Pixel A9 stock GKI modules\n        if: inputs.pixel_a9_compat\n        shell: bash\n        run: |\n          set -euo pipefail\n          CERT_SRC="$GITHUB_WORKSPACE/.github/pixel-a9/stock-gki-cert.pem"\n          CERT_DST="$KERNEL_ROOT/common/certs/pixel_a9_stock_gki_cert.pem"\n          cp "$CERT_SRC" "$CERT_DST"\n\n          # The stock A9 Image keeps protected-module enforcement and trimming on.\n          # Only add the public stock GKI certificate to the trusted keyring.\n          "$KERNEL_ROOT/common/scripts/config" --file "$DEFCONFIG" \\\n            --set-str SYSTEM_TRUSTED_KEYS "certs/pixel_a9_stock_gki_cert.pem" \\\n            --set-str LOCALVERSION "-4k" \\\n            -e LOCALVERSION_AUTO \\\n            -e MODULE_SIG_PROTECT \\\n            -e TRIM_UNUSED_KSYMS \\\n            -e MODVERSIONS \\\n            -e GENDWARFKSYMS\n\n          fingerprint="$(openssl x509 -in "$CERT_SRC" -noout -fingerprint -sha256 | cut -d= -f2)"\n          echo "Pixel A9 stock GKI cert SHA256: $fingerprint"\n          [ "$fingerprint" = "8E:4A:1C:45:9B:AB:D8:41:B6:EE:1B:D6:1A:B3:1E:EA:02:67:F2:DB:7B:10:B2:EE:CE:C4:C9:48:E4:2A:55:D1" ] || {\n            echo "::error::Unexpected Pixel A9 stock GKI certificate"; exit 1;\n          }\n\n      - name: 集成 Droidspaces 支持\n''',
+'pixel trust step')
+
+replace_once(
+'''      - name: 配置内核名称\n        working-directory: ${{ env.KERNEL_ROOT }}\n        run: |\n          if [ -f "build/build.sh" ]; then\n''',
+'''      - name: 配置内核名称\n        working-directory: ${{ env.KERNEL_ROOT }}\n        run: |\n          if [ "${{ inputs.pixel_a9_compat }}" = "true" ]; then\n            # Keep AOSP setlocalversion intact. BUILD_NUMBER plus the exact Git SHA\n            # naturally reproduce -android16-6-g5c5f2fea42dd-ab15835541-4k.\n            sed -i "/stable_scmversion_cmd/s/-maybe-dirty//g" ./build/kernel/kleaf/impl/stamp.bzl\n            echo "BUILD_NUMBER=15835541" >> "$GITHUB_ENV"\n            echo "Pixel A9 mode: preserving upstream setlocalversion"\n            exit 0\n          fi\n\n          if [ -f "build/build.sh" ]; then\n''',
+'preserve setlocalversion')
+
+replace_once(
+'''          INPUT_TIME="${{ inputs.build_time }}"\n          if [[ -n "$INPUT_TIME" && "$INPUT_TIME" != "N" && "$INPUT_TIME" != "n" ]]; then\n            DATESTR="$INPUT_TIME"\n          else\n            DATESTR="$(TZ='UTC' date +'%a %b %d %T %Z %Y')"\n          fi\n''',
+'''          INPUT_TIME="${{ inputs.build_time }}"\n          if [ "${{ inputs.pixel_a9_compat }}" = "true" ]; then\n            DATESTR="Fri Jul 10 21:44:24 UTC 2026"\n          elif [[ -n "$INPUT_TIME" && "$INPUT_TIME" != "N" && "$INPUT_TIME" != "n" ]]; then\n            DATESTR="$INPUT_TIME"\n          else\n            DATESTR="$(TZ='UTC' date +'%a %b %d %T %Z %Y')"\n          fi\n''',
+'pixel timestamp')
+
+replace_once(
+'''      # ==================== 验证 Image-only 模块兼容配置 ====================\n      - name: 验证 Image-only 模块兼容配置\n''',
+'''      # ==================== 验证 Pixel A9 production compatibility ====================\n      - name: Verify Pixel A9 stock compatibility\n        if: inputs.pixel_a9_compat\n        shell: bash\n        run: |\n          set -euo pipefail\n          IMAGE="$KERNEL_ROOT/bazel-bin/common/kernel_aarch64/Image"\n          EXPECTED_RELEASE="6.12.69-android16-6-g5c5f2fea42dd-ab15835541-4k"\n          VERSION="$(strings "$IMAGE" | grep -m1 'Linux version')"\n          echo "$VERSION"\n          grep -qF "Linux version $EXPECTED_RELEASE" <<< "$VERSION" || {\n            echo "::error::Pixel A9 kernel identity mismatch; expected $EXPECTED_RELEASE"\n            exit 1\n          }\n\n          FINAL_CONFIG="$RUNNER_TEMP/${CONFIG}-pixel-a9.config"\n          "$KERNEL_ROOT/common/scripts/extract-ikconfig" "$IMAGE" > "$FINAL_CONFIG"\n          for required in \\\n            'CONFIG_MODULE_SIG_PROTECT=y' \\\n            'CONFIG_TRIM_UNUSED_KSYMS=y' \\\n            'CONFIG_MODVERSIONS=y' \\\n            'CONFIG_GENDWARFKSYMS=y' \\\n            'CONFIG_SYSTEM_TRUSTED_KEYS="certs/pixel_a9_stock_gki_cert.pem"' \\\n            'CONFIG_LOCALVERSION="-4k"'; do\n            grep -qFx "$required" "$FINAL_CONFIG" || { echo "::error::Missing stock-compatible config: $required"; exit 1; }\n          done\n\n          SYMVERS="$(find "$KERNEL_ROOT/bazel-bin" -type f -name Module.symvers -print -quit)"\n          if [ -z "$SYMVERS" ]; then\n            echo "::error::Could not locate Module.symvers for Pixel A9 ABI validation"\n            exit 1\n          fi\n          echo "Validating stock module CRC baseline against $SYMVERS"\n          mismatches=0\n          while IFS=$'\\t' read -r module expected symbol; do\n            [ -n "$symbol" ] || continue\n            actual="$(awk -v s="$symbol" '$2 == s { print $1; exit }' "$SYMVERS")"\n            if [ -z "$actual" ]; then\n              echo "::error::$module requires missing symbol $symbol"\n              mismatches=$((mismatches + 1))\n            elif [ "${actual,,}" != "${expected,,}" ]; then\n              echo "::error::$module CRC mismatch for $symbol: stock=$expected build=$actual"\n              mismatches=$((mismatches + 1))\n            fi\n          done < "$GITHUB_WORKSPACE/.github/pixel-a9/stock-module-crcs-critical.tsv"\n          [ "$mismatches" -eq 0 ] || exit 1\n          echo "Pixel A9 critical wwan/rfkill/rust_binder CRC baseline matches stock."\n\n      # ==================== 验证 Image-only 模块兼容配置 ====================\n      - name: 验证 Image-only 模块兼容配置\n''',
+'pixel compatibility validation')
+
+# In production-compat mode --notrim must never be enabled; preserve the stock
+# MODULE_SIG_PROTECT/TRIM_UNUSED_KSYMS behavior instead.
+old = '''              NOTRIM_FLAG=""\n              if [ "${{ inputs.image_only_compat }}" = "true" ]; then\n                echo "启用 Image-only system_dlkm 兼容模式: --notrim"\n                NOTRIM_FLAG="--notrim"\n              fi\n'''
+new = '''              NOTRIM_FLAG=""\n              if [ "${{ inputs.pixel_a9_compat }}" = "true" ] && [ "${{ inputs.image_only_compat }}" = "true" ]; then\n                echo "::error::Pixel A9 production compatibility cannot be combined with --notrim"\n                exit 1\n              elif [ "${{ inputs.image_only_compat }}" = "true" ]; then\n                echo "启用 Image-only system_dlkm 兼容模式: --notrim"\n                NOTRIM_FLAG="--notrim"\n              fi\n'''
+count = s.count(old)
+if count != 2:
+    raise SystemExit(f'notrim guards: expected 2 matches, found {count}')
+s = s.replace(old, new)
+
+p.write_text(s)
+print('Pixel A9 workflow patch applied successfully')
