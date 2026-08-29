@@ -1,0 +1,30 @@
+name: Apply Pixel A9 clean SCM stamp fix
+on:
+  push:
+    branches:
+      - fix/pixel-a9-clean-scm-stamp
+    paths:
+      - .github/workflows/_apply-pixel-a9-clean-stamp.yml
+permissions:
+  contents: write
+jobs:
+  apply:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: fix/pixel-a9-clean-scm-stamp
+          fetch-depth: 0
+      - name: Apply clean stamp fix
+        run: python3 .github/scripts/apply_pixel_a9_clean_stamp.py
+      - name: Remove one-shot helper
+        run: |
+          rm -f .github/workflows/_apply-pixel-a9-clean-stamp.yml
+          rm -f .github/scripts/apply_pixel_a9_clean_stamp.py
+      - name: Commit generated workflow
+        run: |
+          git config user.name "PA733 CI patch helper"
+          git config user.email "actions@github.com"
+          git add .github/workflows/build.yml .github/workflows/_apply-pixel-a9-clean-stamp.yml .github/scripts/apply_pixel_a9_clean_stamp.py
+          git commit -m "build: suppress intentional dirty SCM state for Pixel A9"
+          git push origin HEAD:fix/pixel-a9-clean-scm-stamp
