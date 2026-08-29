@@ -1,16 +1,16 @@
 name: Apply Android 16 KMI fix
 
 on:
-  push:
+  pull_request:
     branches:
-      - fix/android16-kmi-generation
+      - main
 
 permissions:
   contents: write
 
 jobs:
   apply:
-    if: github.actor != 'github-actions[bot]'
+    if: github.head_ref == 'fix/android16-kmi-generation'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
@@ -27,7 +27,6 @@ jobs:
           path = Path('.github/workflows/build.yml')
           s = path.read_text()
 
-          # 1) Detect Android 16 / 6.12 KMI generation directly from AOSP.
           anchor = '''          $REPO --trace sync -c -j$(nproc --all) --no-tags --fail-fast
           echo "REMOTE_BRANCH=$REMOTE_BRANCH" >> $GITHUB_ENV
 '''
@@ -75,14 +74,12 @@ jobs:
               raise SystemExit(f'expected one source-sync anchor, found {s.count(anchor)}')
           s = s.replace(anchor, insert, 1)
 
-          # 2) Stop forcing Android 16 / 6.12 to stale generation 5.
           old = '              "android16-6.12") KMI_TAG="android16-5" ;;'
           new = '              "android16-6.12") KMI_TAG="${KMI_TAG:?KMI_TAG was not detected from AOSP source}" ;;'
           if s.count(old) != 2:
               raise SystemExit(f'expected two android16-5 KMI mappings, found {s.count(old)}')
           s = s.replace(old, new)
 
-          # 3) Keep KMI/ABI enforcement for clean diagnostic builds.
           old = '''            # 配置 6.1+ 内核
             sed -i '/^[[:space:]]*"protected_exports_list"[[:space:]]*:[[:space:]]*"android\\/abi_gki_protected_exports_aarch64",$/d' ./common/BUILD.bazel
             sed -i '/kmi_symbol_list_strict_mode/d' ./common/BUILD.bazel
@@ -111,8 +108,6 @@ jobs:
               raise SystemExit(f'expected two strict-mode removals, found {s.count(strict)}')
           s = s.replace(strict, strict_new)
 
-          # 4) Verify the produced Image advertises the KMI generation that was
-          # detected from the AOSP source. This catches future stale rewrites.
           anchor = '''            echo "构建完成: $BUILD_VARIANT"
 
       # ==================== 准备内核 Image ====================
