@@ -63,6 +63,7 @@ on:
         description: "启用一加 8E 支持"
         required: false
         type: boolean
+        default: false
       droidspaces:
         description: "Droidspaces 容器支持"
         required: false
