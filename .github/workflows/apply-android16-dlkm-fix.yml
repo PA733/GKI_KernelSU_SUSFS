@@ -32,3 +32,5 @@ jobs:
           git add .github/workflows/build.yml
           git commit -m "build: add Android 16 system_dlkm compatibility modes"
           git push origin HEAD:fix/android16-system-dlkm-compat
+
+# one-shot patch runner; this file removes itself after a successful run
