@@ -32,3 +32,5 @@ jobs:
           git add .github/build.android16-dlkm.reordered.yml
           git commit -m "ci: publish reordered Android 16 build workflow blob"
           git push origin HEAD:fix/android16-system-dlkm-compat
+
+# one-shot helper
