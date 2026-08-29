@@ -90,6 +90,16 @@ on:
         required: false
         type: boolean
         default: false
+      image_only_compat:
+        description: "Use Kleaf --notrim so an Image-only build can load the device stock system_dlkm modules"
+        required: false
+        type: boolean
+        default: false
+      build_matching_system_dlkm:
+        description: "Also export a matching GKI distribution including system_dlkm artifacts"
+        required: false
+        type: boolean
+        default: false
 
 jobs:
   build-kernel:
@@ -137,6 +147,8 @@ jobs:
           echo "CVE-2026-43499: ${{ inputs.clean_build != true && inputs.cve_2026_43499_patch }}"
           echo "NTSync        : ${{ inputs.clean_build != true && inputs.droidspaces != 'off' && inputs.droidspaces_ntsync }}"
           echo "Bypass 构建   : ${{ inputs.build_bypass }}"
+          echo "Image-only兼容: ${{ inputs.image_only_compat }}"
+          echo "匹配 system_dlkm: ${{ inputs.build_matching_system_dlkm }}"
           echo "Stock Config  : ${{ inputs.clean_build && '禁用' || '自动检测 config/stock_defconfig' }}"
           echo "========================================"
 
@@ -862,10 +874,12 @@ jobs:
           git clone --depth 1 https://github.com/ravindu644/Droidspaces-OSS.git /tmp/Droidspaces-OSS
           echo "DROIDSPACES_PATCHES=/tmp/Droidspaces-OSS/Documentation/resources/kernel-patches/GKI" >> $GITHUB_ENV
 
-      # ==================== 备份原始 defconfig ====================
-      # 用于后续生成 defconfig fragment（bazel trim 兼容）
-      - name: 备份原始 defconfig
-        run: cp "$DEFCONFIG" "$DEFCONFIG.orig"
+      # ==================== 备份原始构建配置 ====================
+      # defconfig 用于 fragment；build.config.gki.aarch64 用于后续构建匹配 system_dlkm。
+      - name: 备份原始构建配置
+        run: |
+          cp "$DEFCONFIG" "$DEFCONFIG.orig"
+          cp "$KERNEL_ROOT/common/build.config.gki.aarch64" "$KERNEL_ROOT/common/build.config.gki.aarch64.orig"
 
       - name: 集成 Droidspaces 支持
         if: inputs.clean_build != true && inputs.droidspaces != 'off'
@@ -1464,7 +1478,12 @@ jobs:
               if [ "${{ inputs.kernel_version }}" = "6.12" ]; then
                 LTO_FLAG="--lto=none"
               fi
-              tools/bazel build --disk_cache=/home/runner/.cache/bazel --config=fast $LTO_FLAG $FRAG_FLAG //common:kernel_aarch64_dist || exit 1
+              NOTRIM_FLAG=""
+              if [ "${{ inputs.image_only_compat }}" = "true" ]; then
+                echo "启用 Image-only system_dlkm 兼容模式: --notrim"
+                NOTRIM_FLAG="--notrim"
+              fi
+              tools/bazel build --disk_cache=/home/runner/.cache/bazel --config=fast $LTO_FLAG $NOTRIM_FLAG $FRAG_FLAG //common:kernel_aarch64_dist || exit 1
               strings ./bazel-bin/common/kernel_aarch64/Image | grep 'Linux version'
             fi
 
@@ -1496,6 +1515,34 @@ jobs:
             exit 1
           fi
 
+      # ==================== 验证 Image-only 模块兼容配置 ====================
+      - name: 验证 Image-only 模块兼容配置
+        if: inputs.android_version == 'android16' && inputs.kernel_version == '6.12'
+        shell: bash
+        run: |
+          set -euo pipefail
+          IMAGE="$KERNEL_ROOT/bazel-bin/common/kernel_aarch64/Image"
+          FINAL_CONFIG="$RUNNER_TEMP/${CONFIG}-final.config"
+          "$KERNEL_ROOT/common/scripts/extract-ikconfig" "$IMAGE" > "$FINAL_CONFIG"
+
+          echo "=== Module compatibility configuration ==="
+          grep -E 'CONFIG_(MODULE_SIG_PROTECT|MODULE_SIG_PROTECT_LIST|TRIM_UNUSED_KSYMS|MODVERSIONS|GENDWARFKSYMS)' "$FINAL_CONFIG" || true
+
+          grep -q '^CONFIG_MODVERSIONS=y$' "$FINAL_CONFIG" || {
+            echo "::error::CONFIG_MODVERSIONS must remain enabled"; exit 1;
+          }
+
+          if [ "${{ inputs.image_only_compat }}" = "true" ]; then
+            if grep -q '^CONFIG_MODULE_SIG_PROTECT=y$' "$FINAL_CONFIG"; then
+              echo "::error::--notrim did not disable CONFIG_MODULE_SIG_PROTECT"
+              exit 1
+            fi
+            if grep -q '^CONFIG_TRIM_UNUSED_KSYMS=y$' "$FINAL_CONFIG"; then
+              echo "::error::--notrim did not disable CONFIG_TRIM_UNUSED_KSYMS"
+              exit 1
+            fi
+          fi
+
       # ==================== 准备内核 Image ====================
       # 复制编译产物到工作目录，供 AnyKernel3 打包使用
       - name: 准备内核 Image
@@ -1507,6 +1554,32 @@ jobs:
           fi
 
           cp "$SRC_DIR/Image" ./
+
+      # ==================== 构建匹配的 GKI system_dlkm 分发 ====================
+      - name: 构建匹配的 GKI system_dlkm 分发
+        if: inputs.build_matching_system_dlkm && inputs.kernel_version != '5.10' && inputs.kernel_version != '5.15'
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd "$KERNEL_ROOT"
+
+          # Restore the untouched AOSP distribution configuration so GKI modules
+          # and system_dlkm are generated instead of shipping Image alone.
+          cp ./common/build.config.gki.aarch64.orig ./common/build.config.gki.aarch64
+
+          FRAG="common/arch/arm64/configs/ksu.fragment"
+          FRAG_FLAG=""
+          [ -s "$FRAG" ] && FRAG_FLAG="--defconfig_fragment=//common:arch/arm64/configs/ksu.fragment"
+          LTO_FLAG="--lto=thin"
+          [ "${{ inputs.kernel_version }}" = "6.12" ] && LTO_FLAG="--lto=none"
+
+          DIST_DIR="$GITHUB_WORKSPACE/gki-dist/$CONFIG"
+          mkdir -p "$DIST_DIR"
+          tools/bazel run --disk_cache=/home/runner/.cache/bazel --config=fast \
+            $LTO_FLAG $FRAG_FLAG //common:kernel_aarch64_dist -- --destdir="$DIST_DIR"
+
+          echo "=== matching GKI dist ==="
+          find "$DIST_DIR" -maxdepth 1 -type f -printf '%f\n' | sort
 
       # ==================== 激活 Bypass 构建 ====================
       # Bypass 只放宽内核模块版本校验，普通 Image 始终保留为默认产物。
@@ -1578,7 +1651,12 @@ jobs:
               if [ "${{ inputs.kernel_version }}" = "6.12" ]; then
                 LTO_FLAG="--lto=none"
               fi
-              tools/bazel build --disk_cache=/home/runner/.cache/bazel --config=fast $LTO_FLAG $FRAG_FLAG //common:kernel_aarch64_dist || exit 1
+              NOTRIM_FLAG=""
+              if [ "${{ inputs.image_only_compat }}" = "true" ]; then
+                echo "启用 Image-only system_dlkm 兼容模式: --notrim"
+                NOTRIM_FLAG="--notrim"
+              fi
+              tools/bazel build --disk_cache=/home/runner/.cache/bazel --config=fast $LTO_FLAG $NOTRIM_FLAG $FRAG_FLAG //common:kernel_aarch64_dist || exit 1
               strings ./bazel-bin/common/kernel_aarch64/Image | grep 'Linux version'
             fi
 
@@ -1701,7 +1779,25 @@ jobs:
               fi
               echo "$REL" >> "$REJECTS_DIR/index.txt"
             done
+            echo "::error::检测到 $REJ_COUNT 个未解决的补丁冲突，拒绝发布可能部分应用的内核"
+            printf '  %s\n' "${REJS[@]}"
           fi
+
+      - name: 拒绝包含补丁冲突的构建
+        if: always() && env.REJ_COUNT > 0
+        run: |
+          echo "::error::存在未解决的 .rej 补丁冲突；构建产物不会作为有效内核发布。"
+          exit 1
+
+      # ==================== 上传匹配 GKI 分发文件 ====================
+      - name: 上传匹配 GKI 分发文件
+        if: inputs.build_matching_system_dlkm && inputs.kernel_version != '5.10' && inputs.kernel_version != '5.15'
+        uses: actions/upload-artifact@v6
+        with:
+          name: ${{ env.BUILD_VARIANT }}_kernel-${{ env.CONFIG }}-gki-dist
+          path: gki-dist/${{ env.CONFIG }}/
+          if-no-files-found: error
+          compression-level: 0
 
       # ==================== 上传构建产物 ====================
       # AnyKernel3 包本身已是 zip，upload-artifact 会再套一层 zip 容器
