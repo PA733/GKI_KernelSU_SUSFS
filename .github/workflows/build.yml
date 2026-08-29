@@ -1603,7 +1603,7 @@ jobs:
               fi
               STAMP_FLAG=""
               if [ "${{ inputs.pixel_a9_compat }}" = "true" ]; then
-                echo "Pixel A9 mode: enabling Kleaf SCM stamping for g5c5f2fea42dd-ab15835541"
+                echo "Pixel A9 mode: enabling Kleaf SCM stamping"
                 STAMP_FLAG="--config=stamp"
               fi
               tools/bazel build --disk_cache=/home/runner/.cache/bazel --config=fast $STAMP_FLAG $LTO_FLAG $NOTRIM_FLAG $FRAG_FLAG //common:kernel_aarch64_dist || exit 1
