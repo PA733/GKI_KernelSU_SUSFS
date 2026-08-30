@@ -40,6 +40,16 @@ on:
         required: false
         type: boolean
         default: false
+      pin_production_snapshot:
+        description: "Pin exact A9 production snapshot; disable for public KMI-generation experiment"
+        required: false
+        type: boolean
+        default: true
+      public_kmi_tag:
+        description: "Public kernel/common tag when production pin is disabled"
+        required: false
+        type: string
+        default: "android16-6.12-2026-03_r52"
 
 jobs:
   pixel-a9:
@@ -69,3 +79,5 @@ jobs:
       image_only_compat: false
       build_matching_system_dlkm: false
       pixel_a9_compat: true
+      pixel_a9_pin_production_snapshot: ${{ inputs.pin_production_snapshot }}
+      pixel_a9_public_tag: ${{ inputs.public_kmi_tag }}
