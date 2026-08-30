@@ -1,0 +1,30 @@
+name: Apply Pixel A9 vmlinux.symvers validator fix
+on:
+  push:
+    branches:
+      - fix/pixel-a9-vmlinux-symvers
+    paths:
+      - .github/workflows/_apply-pixel-a9-vmlinux-symvers.yml
+permissions:
+  contents: write
+jobs:
+  apply:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: fix/pixel-a9-vmlinux-symvers
+          fetch-depth: 0
+      - name: Apply validator fix
+        run: python3 .github/scripts/apply_pixel_a9_vmlinux_symvers.py
+      - name: Remove one-shot helper
+        run: |
+          rm -f .github/workflows/_apply-pixel-a9-vmlinux-symvers.yml
+          rm -f .github/scripts/apply_pixel_a9_vmlinux_symvers.py
+      - name: Commit generated workflow
+        run: |
+          git config user.name "PA733 CI patch helper"
+          git config user.email "actions@github.com"
+          git add .github/workflows/build.yml .github/workflows/_apply-pixel-a9-vmlinux-symvers.yml .github/scripts/apply_pixel_a9_vmlinux_symvers.py
+          git commit -m "build: validate Pixel A9 ABI with vmlinux.symvers"
+          git push origin HEAD:fix/pixel-a9-vmlinux-symvers
