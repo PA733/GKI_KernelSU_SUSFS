@@ -1,19 +1,24 @@
 name: Patch Pixel A9 SUSFS context
 
 on:
-  push:
+  pull_request:
     branches:
-      - fix/pixel-a9-susfs-task-mmu-context
+      - main
+    paths:
+      - '.github/scripts/patch-pixel-a9-susfs-context.py'
+      - '.github/workflows/patch-pixel-a9-susfs-context.yml'
 
 permissions:
   contents: write
 
 jobs:
   patch:
+    if: github.head_ref == 'fix/pixel-a9-susfs-task-mmu-context'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
         with:
+          ref: ${{ github.head_ref }}
           fetch-depth: 0
       - name: Apply focused workflow patch
         run: |
