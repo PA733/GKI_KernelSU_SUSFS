@@ -1680,9 +1680,15 @@ jobs:
             grep -qFx "$required" "$FINAL_CONFIG" || { echo "::error::Missing stock-compatible config: $required"; exit 1; }
           done
 
-          SYMVERS="$(find "$KERNEL_ROOT/bazel-bin" -type f -name Module.symvers -print -quit)"
-          if [ -z "$SYMVERS" ]; then
-            echo "::error::Could not locate Module.symvers for Pixel A9 ABI validation"
+          SYMVERS="$KERNEL_ROOT/bazel-bin/common/kernel_aarch64/vmlinux.symvers"
+          if [ ! -f "$SYMVERS" ]; then
+            SYMVERS="$(find -L "$KERNEL_ROOT/bazel-bin" -type f \
+              \( -name vmlinux.symvers -o -name Module.symvers \) -print -quit 2>/dev/null || true)"
+          fi
+          if [ -z "$SYMVERS" ] || [ ! -f "$SYMVERS" ]; then
+            echo "::error::Could not locate vmlinux.symvers/Module.symvers for Pixel A9 ABI validation"
+            echo "=== available symvers-like outputs ==="
+            find -L "$KERNEL_ROOT/bazel-bin/common" -maxdepth 4 -type f -iname '*symvers*' -print 2>/dev/null || true
             exit 1
           fi
           echo "Validating stock module CRC baseline against $SYMVERS"
