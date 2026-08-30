@@ -473,7 +473,9 @@ jobs:
           fi
 
           echo "Checking out public kernel/common tag: $TAG"
-          git -C common fetch -q origin "refs/tags/$TAG:refs/tags/$TAG"
+          # repo sync configures kernel/common with the AOSP remote named "aosp".
+          # Reuse that existing repo-managed remote rather than assuming "origin".
+          git -C common fetch -q aosp "refs/tags/$TAG:refs/tags/$TAG"
           git -C common checkout -q --detach "refs/tags/$TAG"
           ACTUAL_COMMON="$(git -C common rev-parse HEAD)"
           echo "Public tag common SHA: $ACTUAL_COMMON"
