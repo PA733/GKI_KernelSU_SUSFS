@@ -115,6 +115,11 @@ on:
         required: false
         type: string
         default: ""
+      pixel_a9_inject_stock_cert:
+        description: "Trust the Pixel A9 stock GKI certificate for protected stock modules"
+        required: false
+        type: boolean
+        default: true
 
 jobs:
   build-kernel:
@@ -1030,12 +1035,18 @@ jobs:
           set -euo pipefail
           CERT_SRC="$GITHUB_WORKSPACE/.github/pixel-a9/stock-gki-cert.pem"
           CERT_DST="$KERNEL_ROOT/common/certs/pixel_a9_stock_gki_cert.pem"
-          cp "$CERT_SRC" "$CERT_DST"
+          TRUSTED_KEYS=""
+          if [ "${{ inputs.pixel_a9_inject_stock_cert }}" = "true" ]; then
+            cp "$CERT_SRC" "$CERT_DST"
+            TRUSTED_KEYS="certs/pixel_a9_stock_gki_cert.pem"
+          else
+            echo "Pixel A9 diagnostic mode: stock GKI certificate injection disabled"
+          fi
 
-          # The stock A9 Image keeps protected-module enforcement and trimming on.
-          # Only add the public stock GKI certificate to the trusted keyring.
+          # Keep protected-module enforcement, trimming and all other stock-compatible
+          # settings identical. Toggle only the certificate injected into trusted keys.
           "$KERNEL_ROOT/common/scripts/config" --file "$DEFCONFIG" \
-            --set-str SYSTEM_TRUSTED_KEYS "certs/pixel_a9_stock_gki_cert.pem" \
+            --set-str SYSTEM_TRUSTED_KEYS "$TRUSTED_KEYS" \
             --set-str LOCALVERSION "-4k" \
             -e LOCALVERSION_AUTO \
             -e MODULE_SIG_PROTECT \
@@ -1043,11 +1054,13 @@ jobs:
             -e MODVERSIONS \
             -e GENDWARFKSYMS
 
-          fingerprint="$(openssl x509 -in "$CERT_SRC" -noout -fingerprint -sha256 | cut -d= -f2)"
-          echo "Pixel A9 stock GKI cert SHA256: $fingerprint"
-          [ "$fingerprint" = "8E:4A:1C:45:9B:AB:D8:41:B6:EE:1B:D6:1A:B3:1E:EA:02:67:F2:DB:7B:10:B2:EE:CE:C4:C9:48:E4:2A:55:D1" ] || {
-            echo "::error::Unexpected Pixel A9 stock GKI certificate"; exit 1;
-          }
+          if [ "${{ inputs.pixel_a9_inject_stock_cert }}" = "true" ]; then
+            fingerprint="$(openssl x509 -in "$CERT_SRC" -noout -fingerprint -sha256 | cut -d= -f2)"
+            echo "Pixel A9 stock GKI cert SHA256: $fingerprint"
+            [ "$fingerprint" = "8E:4A:1C:45:9B:AB:D8:41:B6:EE:1B:D6:1A:B3:1E:EA:02:67:F2:DB:7B:10:B2:EE:CE:C4:C9:48:E4:2A:55:D1" ] || {
+              echo "::error::Unexpected Pixel A9 stock GKI certificate"; exit 1;
+            }
+          fi
 
       - name: 集成 Droidspaces 支持
         if: inputs.clean_build != true && inputs.droidspaces != 'off'
@@ -1745,10 +1758,20 @@ jobs:
             'CONFIG_TRIM_UNUSED_KSYMS=y' \
             'CONFIG_MODVERSIONS=y' \
             'CONFIG_GENDWARFKSYMS=y' \
-            'CONFIG_SYSTEM_TRUSTED_KEYS="certs/pixel_a9_stock_gki_cert.pem"' \
             'CONFIG_LOCALVERSION="-4k"'; do
             grep -qFx "$required" "$FINAL_CONFIG" || { echo "::error::Missing stock-compatible config: $required"; exit 1; }
           done
+
+          if [ "${{ inputs.pixel_a9_inject_stock_cert }}" = "true" ]; then
+            EXPECTED_TRUST='CONFIG_SYSTEM_TRUSTED_KEYS="certs/pixel_a9_stock_gki_cert.pem"'
+          else
+            EXPECTED_TRUST='CONFIG_SYSTEM_TRUSTED_KEYS=""'
+          fi
+          grep -qFx "$EXPECTED_TRUST" "$FINAL_CONFIG" || {
+            echo "::error::Unexpected Pixel A9 trusted-key config; expected: $EXPECTED_TRUST"
+            exit 1
+          }
+          echo "Pixel A9 stock certificate injection: ${{ inputs.pixel_a9_inject_stock_cert }}"
 
           SYMVERS="$KERNEL_ROOT/bazel-bin/common/kernel_aarch64/vmlinux.symvers"
           if [ ! -f "$SYMVERS" ]; then
