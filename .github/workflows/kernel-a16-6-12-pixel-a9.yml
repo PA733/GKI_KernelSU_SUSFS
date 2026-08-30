@@ -40,6 +40,11 @@ on:
         required: false
         type: boolean
         default: false
+      cve_2026_43499_patch:
+        description: "应用 CVE-2026-43499 rtmutex 修复链"
+        required: false
+        type: boolean
+        default: true
       pin_production_snapshot:
         description: "Pin exact A9 production snapshot; disable for public KMI-generation experiment"
         required: false
@@ -70,7 +75,7 @@ jobs:
       use_zram: ${{ inputs.use_zram }}
       use_bbg: ${{ inputs.use_bbg }}
       use_rekernel: ${{ inputs.use_rekernel }}
-      cve_2026_43499_patch: false
+      cve_2026_43499_patch: ${{ inputs.cve_2026_43499_patch }}
       enable_susfs: ${{ !inputs.clean_build && inputs.enable_susfs }}
       supp_op: false
       droidspaces: "off"
