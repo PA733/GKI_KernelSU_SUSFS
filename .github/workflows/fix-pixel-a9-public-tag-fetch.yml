@@ -13,6 +13,7 @@ permissions:
 
 jobs:
   patch:
+    # One-shot helper for PR #12; it removes itself in the generated commit.
     if: github.head_ref == 'test/pixel-a9-public-kmi6' || github.ref == 'refs/heads/test/pixel-a9-public-kmi6'
     runs-on: ubuntu-latest
     steps:
