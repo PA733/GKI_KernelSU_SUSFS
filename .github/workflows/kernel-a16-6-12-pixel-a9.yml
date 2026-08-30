@@ -50,6 +50,11 @@ on:
         required: false
         type: string
         default: "android16-6.12-2026-03_r52"
+      inject_stock_gki_cert:
+        description: "Inject Pixel A9 stock GKI certificate into trusted keys"
+        required: false
+        type: boolean
+        default: true
 
 jobs:
   pixel-a9:
@@ -81,3 +86,4 @@ jobs:
       pixel_a9_compat: true
       pixel_a9_pin_production_snapshot: ${{ inputs.pin_production_snapshot }}
       pixel_a9_public_tag: ${{ inputs.public_kmi_tag }}
+      pixel_a9_inject_stock_cert: ${{ inputs.inject_stock_gki_cert }}
