@@ -105,6 +105,16 @@ on:
         required: false
         type: boolean
         default: false
+      pixel_a9_pin_production_snapshot:
+        description: "Pin the exact Pixel A9 production superproject snapshot"
+        required: false
+        type: boolean
+        default: true
+      pixel_a9_public_tag:
+        description: "Public kernel/common tag used when the production snapshot pin is disabled"
+        required: false
+        type: string
+        default: ""
 
 jobs:
   build-kernel:
@@ -362,8 +372,12 @@ jobs:
               echo "::error::Pixel A9 compatibility mode requires android16 / 6.12.69"
               exit 1
             fi
-            # The production snapshot was published through the Android 16 / 6.12 superproject line.
-            FORMATTED_BRANCH="android16-6.12-sp"
+            if [ "${{ inputs.pixel_a9_pin_production_snapshot }}" = "true" ]; then
+              # The production snapshot was published through the Android 16 / 6.12 superproject line.
+              FORMATTED_BRANCH="android16-6.12-sp"
+            else
+              echo "Pixel A9 diagnostic mode: production snapshot pin disabled; using public ${FORMATTED_BRANCH} manifest"
+            fi
           fi
           echo "初始化 repo，分支: common-${FORMATTED_BRANCH}"
 
@@ -383,7 +397,7 @@ jobs:
 
       # ==================== Pixel 11 A9 production snapshot ====================
       - name: Pin Pixel A9 production snapshot
-        if: inputs.pixel_a9_compat
+        if: inputs.pixel_a9_compat && inputs.pixel_a9_pin_production_snapshot
         working-directory: ${{ env.KERNEL_ROOT }}
         shell: bash
         run: |
@@ -443,6 +457,42 @@ jobs:
             echo "PIXEL_A9_SUPERPROJECT=$PIXEL_SUPERPROJECT"
             echo "PIXEL_A9_COMMON=$PIXEL_COMMON"
             echo "BUILD_NUMBER=15835541"
+          } >> "$GITHUB_ENV"
+
+      # ==================== Pixel A9 public KMI diagnostic tag ====================
+      - name: Checkout Pixel A9 public KMI diagnostic tag
+        if: inputs.pixel_a9_compat && !inputs.pixel_a9_pin_production_snapshot
+        working-directory: ${{ env.KERNEL_ROOT }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          TAG="${{ inputs.pixel_a9_public_tag }}"
+          if [ -z "$TAG" ]; then
+            echo "::error::pixel_a9_public_tag is required when the production snapshot pin is disabled"
+            exit 1
+          fi
+
+          echo "Checking out public kernel/common tag: $TAG"
+          git -C common fetch -q origin "refs/tags/$TAG:refs/tags/$TAG"
+          git -C common checkout -q --detach "refs/tags/$TAG"
+          ACTUAL_COMMON="$(git -C common rev-parse HEAD)"
+          echo "Public tag common SHA: $ACTUAL_COMMON"
+
+          if [ "$TAG" = "android16-6.12-2026-03_r52" ]; then
+            EXPECTED_R52="2180dbfe30b8629e6fb80a5957b32630b9a51c7b"
+            [ "$ACTUAL_COMMON" = "$EXPECTED_R52" ] || {
+              echo "::error::r52 SHA mismatch; expected $EXPECTED_R52"
+              exit 1
+            }
+          fi
+
+          grep -q '^SUBLEVEL = 69$' common/Makefile || { echo "::error::Public diagnostic tag is not Linux 6.12.69"; exit 1; }
+          grep -q '^KMI_GENERATION=6$' common/build.config.constants || { echo "::error::Public diagnostic tag is not KMI generation 6"; exit 1; }
+          grep -q '^CLANG_VERSION=r536225$' common/build.config.constants || { echo "::error::Public diagnostic tag does not use r536225"; exit 1; }
+
+          {
+            echo "PIXEL_A9_PUBLIC_TAG=$TAG"
+            echo "PIXEL_A9_PUBLIC_COMMON=$ACTUAL_COMMON"
           } >> "$GITHUB_ENV"
 
       # ==================== 检测 AOSP KMI Generation ====================
@@ -1675,10 +1725,16 @@ jobs:
           EXPECTED_RELEASE="6.12.69-android16-6-g5c5f2fea42dd-ab15835541-4k"
           VERSION="$(strings "$IMAGE" | grep -m1 'Linux version')"
           echo "$VERSION"
-          grep -qF "Linux version $EXPECTED_RELEASE" <<< "$VERSION" || {
-            echo "::error::Pixel A9 kernel identity mismatch; expected $EXPECTED_RELEASE"
-            exit 1
-          }
+          if [ "${{ inputs.pixel_a9_pin_production_snapshot }}" = "true" ]; then
+            grep -qF "Linux version $EXPECTED_RELEASE" <<< "$VERSION" || {
+              echo "::error::Pixel A9 kernel identity mismatch; expected $EXPECTED_RELEASE"
+              exit 1
+            }
+          else
+            echo "Pixel A9 public-tag diagnostic mode: exact stock release identity check intentionally skipped"
+            echo "Diagnostic tag: ${PIXEL_A9_PUBLIC_TAG:-unknown}"
+            echo "Diagnostic common SHA: ${PIXEL_A9_PUBLIC_COMMON:-unknown}"
+          fi
 
           FINAL_CONFIG="$RUNNER_TEMP/${CONFIG}-pixel-a9.config"
           "$KERNEL_ROOT/common/scripts/extract-ikconfig" "$IMAGE" > "$FINAL_CONFIG"
