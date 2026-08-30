@@ -25,6 +25,21 @@ on:
         required: false
         type: boolean
         default: false
+      use_zram:
+        description: "启用 ZRAM 增强算法"
+        required: true
+        type: boolean
+        default: false
+      use_bbg:
+        description: "启用 BBG 防格机"
+        required: true
+        type: boolean
+        default: false
+      use_rekernel:
+        description: "启用 Re-Kernel 驱动"
+        required: false
+        type: boolean
+        default: false
 
 jobs:
   pixel-a9:
@@ -42,9 +57,9 @@ jobs:
       ksu_branch: ${{ inputs.kernelsu_branch }}
       version: ""
       build_time: "Fri Jul 10 21:44:24 UTC 2026"
-      use_zram: false
-      use_bbg: false
-      use_rekernel: false
+      use_zram: ${{ inputs.use_zram }}
+      use_bbg: ${{ inputs.use_bbg }}
+      use_rekernel: ${{ inputs.use_rekernel }}
       cve_2026_43499_patch: false
       enable_susfs: ${{ !inputs.clean_build && inputs.enable_susfs }}
       supp_op: false
