@@ -184,7 +184,7 @@
     },
     {
       "date": "lts",
-      "kernel": "5.10.266",
+      "kernel": "5.10.269",
       "revision": "r1"
     }
   ]
