@@ -408,9 +408,9 @@ jobs:
         run: |
           set -euo pipefail
 
-          PIXEL_SUPERPROJECT="f9247d91f1837638162624a76f0df94f429f3dda"
-          PIXEL_COMMON="5c5f2fea42dd4cc5ae1002945d86e305c09d3262"
-          PIXEL_BUILD="23058b8ede5aa6e1a3bb075be80290ecf44cb17c"
+          PIXEL_SUPERPROJECT="4a7bd11c2ad64ccbd19648297a4fb796e55e4b33"
+          PIXEL_COMMON="70777328ed0e10fa245998c8c719264bbfb78590"
+          PIXEL_BUILD="a71b075c1d43d226779d2e834433e7a1d1885beb"
           PIXEL_CLANG="77c95e8253c2c82ffd4fee92c0ad9f5ac1e8ca04"
           PIXEL_RUST="5c78b1e636b2bf68d46a6980437590fddca64147"
 
@@ -461,7 +461,7 @@ jobs:
           {
             echo "PIXEL_A9_SUPERPROJECT=$PIXEL_SUPERPROJECT"
             echo "PIXEL_A9_COMMON=$PIXEL_COMMON"
-            echo "BUILD_NUMBER=15835541"
+            echo "BUILD_NUMBER=16108597"
           } >> "$GITHUB_ENV"
 
       # ==================== Pixel A9 public KMI diagnostic tag ====================
@@ -1057,7 +1057,7 @@ jobs:
           if [ "${{ inputs.pixel_a9_inject_stock_cert }}" = "true" ]; then
             fingerprint="$(openssl x509 -in "$CERT_SRC" -noout -fingerprint -sha256 | cut -d= -f2)"
             echo "Pixel A9 stock GKI cert SHA256: $fingerprint"
-            [ "$fingerprint" = "8E:4A:1C:45:9B:AB:D8:41:B6:EE:1B:D6:1A:B3:1E:EA:02:67:F2:DB:7B:10:B2:EE:CE:C4:C9:48:E4:2A:55:D1" ] || {
+            [ "$fingerprint" = "58:9B:05:30:41:D8:6A:09:C8:60:79:DB:D0:64:8C:30:5B:E9:6B:5A:98:6D:C6:67:25:62:C2:ED:51:BC:6D:E0" ] || {
               echo "::error::Unexpected Pixel A9 stock GKI certificate"; exit 1;
             }
           fi
@@ -1513,7 +1513,7 @@ jobs:
             # Keep AOSP setlocalversion intact. BUILD_NUMBER plus the exact Git SHA
             # naturally reproduce -android16-6-g5c5f2fea42dd-ab15835541-4k.
             sed -i "/stable_scmversion_cmd/s/-maybe-dirty//g" ./build/kernel/kleaf/impl/stamp.bzl
-            echo "BUILD_NUMBER=15835541" >> "$GITHUB_ENV"
+            echo "BUILD_NUMBER=16108597" >> "$GITHUB_ENV"
             echo "Pixel A9 mode: preserving upstream setlocalversion"
             exit 0
           fi
@@ -1589,7 +1589,7 @@ jobs:
           # 读取输入：输入 N/n 或留空时，使用当前 UTC 时间
           INPUT_TIME="${{ inputs.build_time }}"
           if [ "${{ inputs.pixel_a9_compat }}" = "true" ]; then
-            DATESTR="Fri Jul 10 21:44:24 UTC 2026"
+            DATESTR="Tue Aug 18 04:34:09 UTC 2026"
           elif [[ -n "$INPUT_TIME" && "$INPUT_TIME" != "N" && "$INPUT_TIME" != "n" ]]; then
             DATESTR="$INPUT_TIME"
           else
@@ -1737,7 +1737,7 @@ jobs:
         run: |
           set -euo pipefail
           IMAGE="$KERNEL_ROOT/bazel-bin/common/kernel_aarch64/Image"
-          EXPECTED_RELEASE="6.12.69-android16-6-g5c5f2fea42dd-ab15835541-4k"
+          EXPECTED_RELEASE="6.12.69-android16-6-g70777328ed0e-ab16108597-4k"
           VERSION="$(strings "$IMAGE" | grep -m1 'Linux version')"
           echo "$VERSION"
           if [ "${{ inputs.pixel_a9_pin_production_snapshot }}" = "true" ]; then
