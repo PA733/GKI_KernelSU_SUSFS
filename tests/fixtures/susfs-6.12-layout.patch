@@ -1,0 +1,54 @@
+diff --git a/fs/exec.c b/fs/exec.c
+index 965fdc593..80d5ff9b2 100644
+--- a/fs/exec.c
++++ b/fs/exec.c
+@@ -70,6 +70,9 @@
+ #include <linux/rseq.h>
+ #include <linux/ksm.h>
+ #include <linux/dma-buf.h>
++#ifdef CONFIG_KSU_SUSFS
++#include <linux/susfs_def.h>
++#endif
+ 
+ #include <linux/uaccess.h>
+ #include <asm/mmu_context.h>
+diff --git a/fs/proc/task_mmu.c b/fs/proc/task_mmu.c
+index c79267d5f..00d1fa464 100644
+--- a/fs/proc/task_mmu.c
++++ b/fs/proc/task_mmu.c
+@@ -1549,6 +1591,13 @@ static int show_smap(struct seq_file *m, void *v)
+ 	struct vm_area_struct *vma = v;
+ 	struct mem_size_stats mss = {};
+ 
++#ifdef CONFIG_KSU_SUSFS_SUS_MAP
++	if (vma->vm_file) {
++		if (SUSFS_IS_INODE_SUS_MAP(file_inode(vma->vm_file)))
++			return 0;
++	}
++#endif // #ifdef CONFIG_KSU_SUSFS_SUS_MAP
++
+ 	if (!vma_data_pages(vma))
+ 		goto show_pad;
+ 
+@@ -1618,6 +1667,11 @@ static int show_smaps_rollup(struct seq_file *m, void *v)
+ 			goto out_unlock;
+ 		}
+ 
++#ifdef CONFIG_KSU_SUSFS_SUS_MAP
++		if (vma->vm_file && SUSFS_IS_INODE_SUS_MAP(file_inode(vma->vm_file)))
++			goto bypass_orig_flow;
++#endif // #ifdef CONFIG_KSU_SUSFS_SUS_MAP
++
+ 		if (vma->vm_start < last_vma_end) {
+ 			/*
+ 			 * After retaking the lock, already reported VMA grew
+@@ -1630,6 +1684,9 @@ static int show_smaps_rollup(struct seq_file *m, void *v)
+ 			/* Found next unreported VMA, start from its beginning */
+ 			smap_gather_stats(priv, vma, &mss);
+ 		}
++#ifdef CONFIG_KSU_SUSFS_SUS_MAP
++bypass_orig_flow:
++#endif // #ifdef CONFIG_KSU_SUSFS_SUS_MAP
+ 		last_vma_end = vma->vm_end;
+ 
+ 		/*

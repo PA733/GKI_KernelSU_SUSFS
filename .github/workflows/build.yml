@@ -812,10 +812,8 @@ jobs:
           fi
 
           if [[ "${{ inputs.android_version }}" == "android16" && "${{ inputs.kernel_version }}" == "6.12" ]]; then
-            if [[ "$CURRENT_SUB" -ge 58 ]]; then
-              echo "临时调整 Android 16 6.12 exec.c 上下文"
-              sed -i '/^#include <linux\/dma-buf.h>$/d' fs/exec.c
-            fi
+            python3 "$GITHUB_WORKSPACE/scripts/adapt_susfs_6_12.py" . \
+              "50_add_susfs_in_gki-android16-6.12.patch"
           fi
 
           # Pixel A9 production snapshot uses vma_data_pages() in show_smap(),
@@ -890,13 +888,6 @@ jobs:
             if [[ "$CURRENT_SUB" -le 57 ]]; then
               echo "还原 Android 15 6.6 memory.c 临时调整"
               sed -i '/^#include <linux\/zswap.h>$/d' mm/memory.c
-            fi
-          fi
-
-          if [[ "${{ inputs.android_version }}" == "android16" && "${{ inputs.kernel_version }}" == "6.12" ]]; then
-            if [[ "$CURRENT_SUB" -ge 58 ]] && ! grep -qF '#include <linux/dma-buf.h>' fs/exec.c; then
-              echo "还原 Android 16 6.12 exec.c 临时调整"
-              sed -i '0,/^#include /s//#include <linux\/dma-buf.h>\n&/' fs/exec.c
             fi
           fi
 
@@ -1001,16 +992,6 @@ jobs:
               if [ -f "$SETUID_HOOK" ]; then
                 sed -i 's/defined(CONFIG_KSU_MANUAL_HOOK))/!defined(CONFIG_KSU_SUSFS) \&\& defined(CONFIG_KSU_MANUAL_HOOK))/' "$SETUID_HOOK"
                 echo "已修复 setuid_hook.c 重复定义问题"
-              fi
-
-              # 修复 6.12.58+: exec.c 头部上下文变化导致 SUSFS 补丁漏掉 susfs_def.h
-              if grep -q 'susfs_is_current_proc_umounted' ./fs/exec.c && ! grep -qF '#include <linux/susfs_def.h>' ./fs/exec.c; then
-                if grep -qF '#include <linux/dma-buf.h>' ./fs/exec.c; then
-                  sed -i '/#include <linux\/dma-buf.h>/a #ifdef CONFIG_KSU_SUSFS\n#include <linux\/susfs_def.h>\n#endif' ./fs/exec.c
-                else
-                  sed -i '/#include <linux\/ksm.h>/a #ifdef CONFIG_KSU_SUSFS\n#include <linux\/susfs_def.h>\n#endif' ./fs/exec.c
-                fi
-                echo "已修复 exec.c 缺少 susfs_def.h 问题"
               fi
             fi
           fi
@@ -1618,6 +1599,15 @@ jobs:
           fi
 
       # ==================== 编译普通内核 ====================
+      - name: 编译前检查补丁冲突
+        run: |
+          mapfile -t REJS < <(find "$KERNEL_ROOT" -type f -name '*.rej')
+          if [ "${#REJS[@]}" -gt 0 ]; then
+            printf '  %s\n' "${REJS[@]}"
+            echo "::error::存在未解决的 .rej 补丁冲突，停止编译；冲突文件将在后续步骤上传。"
+            exit 1
+          fi
+
       # 使用重试机制编译普通内核，超时后自动重试
       - name: 构建普通内核
         uses: nick-fields/retry@v4
