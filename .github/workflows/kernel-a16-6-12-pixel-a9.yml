@@ -26,7 +26,7 @@ on:
         type: boolean
         default: false
       use_zram:
-        description: "启用 ZRAM 增强算法"
+        description: "启用内建 ZRAM 与 LZ4KD（4 KiB 页）"
         required: true
         type: boolean
         default: false

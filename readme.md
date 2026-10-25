@@ -49,7 +49,11 @@
 > **默认变体已切换为 ReSukiSU**
 
 > **Android 16：已支持 Android 16 - 6.12 内核版本**
->
+
+Android 16 / 6.12 的 `use_zram` 使用原生 ZRAM LZ4KD 后端，支持 ARM64 4 KiB 页（包括 Pixel A9 固定版本）。构建时设置 `clean_build=false`、`use_zram=true`，会将 ZRAM/ZSMALLOC 内建并把默认压缩算法设为 `lz4kd`，同时保留原有 LZO/LZ4/ZSTD 后端。算法源码来自工作流下载的 `SukiSU_patch/other/zram/lz4k`；6.12 使用本仓库的专用接入补丁。
+
+系统启动脚本可能重新选择压缩算法；运行 `cat /sys/block/zram0/comp_algorithm` 可检查可用算法及方括号标记的当前算法。启用此选项时，CI 会先运行编解码及后端错误处理测试，再编译内核并检查最终 Image 的 LZ4KD 配置。
+
 > **自本仓库的提交#c17aae5起我们已彻底移除对除ReSukiSU以外的KernelSU变体的内核构建支持，如果你出于某种原因更喜欢使用其他KernelSU变体的管理器，你完全不必担心，我们启用了muti-manager (内核中的KernelSU驱动程序仍是ReSukiSU，但支持使用其它大部分KernelSU变体的管理器进行管理，例如KowSU和SukiSU-Ultra的管理器) ，这样你就可以直接使用其他KernelSU变体的管理器，但请务必记住，如果你要反馈问题，请使用ReSukiSU管理器提交日志信息**
 
 > **rekernel功能（测试）：已支持 rekernel 功能（目前处于测试阶段）**

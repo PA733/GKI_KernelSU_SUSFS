@@ -1,0 +1,107 @@
+diff --git a/lib/Kconfig b/lib/Kconfig
+--- a/lib/Kconfig
++++ b/lib/Kconfig
+@@ -331,6 +331,12 @@
+ 	tristate
+ 
+ config LZ4_COMPRESS
++	tristate
++
++config LZ4KD_COMPRESS
++	tristate
++
++config LZ4KD_DECOMPRESS
+ 	tristate
+ 
+ config LZ4HC_COMPRESS
+diff --git a/lib/Makefile b/lib/Makefile
+--- a/lib/Makefile
++++ b/lib/Makefile
+@@ -181,6 +181,8 @@
+ obj-$(CONFIG_LZ4_COMPRESS) += lz4/
+ obj-$(CONFIG_LZ4HC_COMPRESS) += lz4/
+ obj-$(CONFIG_LZ4_DECOMPRESS) += lz4/
++obj-$(CONFIG_LZ4KD_COMPRESS) += lz4kd/
++obj-$(CONFIG_LZ4KD_DECOMPRESS) += lz4kd/
+ obj-$(CONFIG_ZSTD_COMPRESS) += zstd/
+ obj-$(CONFIG_ZSTD_DECOMPRESS) += zstd/
+ obj-$(CONFIG_XZ_DEC) += xz/
+diff --git a/drivers/block/zram/Kconfig b/drivers/block/zram/Kconfig
+--- a/drivers/block/zram/Kconfig
++++ b/drivers/block/zram/Kconfig
+@@ -19,6 +19,15 @@
+ 	depends on ZRAM
+ 	select LZ4_COMPRESS
+ 	select LZ4_DECOMPRESS
++
++config ZRAM_BACKEND_LZ4KD
++	bool "lz4kd compression support"
++	depends on ZRAM && ARM64_4K_PAGES
++	select LZ4KD_COMPRESS
++	select LZ4KD_DECOMPRESS
++	help
++	  Enable the LZ4KD backend for independent 4 KiB pages.
++	  Compression levels and pre-trained dictionaries are not supported.
+ 
+ config ZRAM_BACKEND_LZ4HC
+ 	bool "lz4hc compression support"
+@@ -48,7 +57,7 @@
+ 	depends on ZRAM
+ 	def_bool !ZRAM_BACKEND_LZ4 && !ZRAM_BACKEND_LZ4HC && \
+ 		!ZRAM_BACKEND_ZSTD && !ZRAM_BACKEND_DEFLATE && \
+-		!ZRAM_BACKEND_842
++		!ZRAM_BACKEND_842 && !ZRAM_BACKEND_LZ4KD
+ 
+ config ZRAM_BACKEND_LZO
+ 	bool "lzo and lzo-rle compression support" if !ZRAM_BACKEND_FORCE_LZO
+@@ -74,6 +83,10 @@
+ 	bool "lz4"
+ 	depends on ZRAM_BACKEND_LZ4
+ 
++config ZRAM_DEF_COMP_LZ4KD
++	bool "lz4kd"
++	depends on ZRAM_BACKEND_LZ4KD
++
+ config ZRAM_DEF_COMP_LZ4HC
+ 	bool "lz4hc"
+ 	depends on ZRAM_BACKEND_LZ4HC
+@@ -98,6 +111,7 @@
+ 	default "lzo-rle" if ZRAM_DEF_COMP_LZORLE
+ 	default "lzo" if ZRAM_DEF_COMP_LZO
+ 	default "lz4" if ZRAM_DEF_COMP_LZ4
++	default "lz4kd" if ZRAM_DEF_COMP_LZ4KD
+ 	default "lz4hc" if ZRAM_DEF_COMP_LZ4HC
+ 	default "zstd" if ZRAM_DEF_COMP_ZSTD
+ 	default "deflate" if ZRAM_DEF_COMP_DEFLATE
+diff --git a/drivers/block/zram/Makefile b/drivers/block/zram/Makefile
+--- a/drivers/block/zram/Makefile
++++ b/drivers/block/zram/Makefile
+@@ -4,6 +4,7 @@
+ 
+ zram-$(CONFIG_ZRAM_BACKEND_LZO)		+= backend_lzorle.o backend_lzo.o
+ zram-$(CONFIG_ZRAM_BACKEND_LZ4)		+= backend_lz4.o
++zram-$(CONFIG_ZRAM_BACKEND_LZ4KD)	+= backend_lz4kd.o
+ zram-$(CONFIG_ZRAM_BACKEND_LZ4HC)	+= backend_lz4hc.o
+ zram-$(CONFIG_ZRAM_BACKEND_ZSTD)	+= backend_zstd.o
+ zram-$(CONFIG_ZRAM_BACKEND_DEFLATE)	+= backend_deflate.o
+diff --git a/drivers/block/zram/zcomp.c b/drivers/block/zram/zcomp.c
+--- a/drivers/block/zram/zcomp.c
++++ b/drivers/block/zram/zcomp.c
+@@ -15,6 +15,7 @@
+ #include "backend_lzo.h"
+ #include "backend_lzorle.h"
+ #include "backend_lz4.h"
++#include "backend_lz4kd.h"
+ #include "backend_lz4hc.h"
+ #include "backend_zstd.h"
+ #include "backend_deflate.h"
+@@ -27,6 +28,9 @@
+ #endif
+ #if IS_ENABLED(CONFIG_ZRAM_BACKEND_LZ4)
+ 	&backend_lz4,
++#endif
++#if IS_ENABLED(CONFIG_ZRAM_BACKEND_LZ4KD)
++	&backend_lz4kd,
+ #endif
+ #if IS_ENABLED(CONFIG_ZRAM_BACKEND_LZ4HC)
+ 	&backend_lz4hc,

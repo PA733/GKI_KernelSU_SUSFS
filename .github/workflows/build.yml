@@ -363,6 +363,14 @@ jobs:
           echo "使用当前仓库补丁目录: $ZZH_PATCHES"
           git clone https://github.com/Numbersf/Action-Build.git --depth=1
 
+      - name: 测试 6.12 LZ4KD 后端
+        if: inputs.clean_build != true && inputs.use_zram && inputs.kernel_version == '6.12'
+        env:
+          CC: gcc
+        run: |
+          python3 "$GITHUB_WORKSPACE/tests/check_lz4kd_backend.py" \
+            "$SUKISU_PATCHES/other/zram/lz4k"
+
       # ==================== 初始化并同步内核源码 ====================
       # 使用 repo 工具从 AOSP 获取 GKI 内核源码
       - name: 初始化并同步内核源码
@@ -1237,6 +1245,13 @@ jobs:
         if: inputs.clean_build != true && inputs.use_zram
         working-directory: ${{ env.KERNEL_ROOT }}/common
         run: |
+          # 6.12 uses native ZRAM backends. Keep its stock LZ4 implementation
+          # and integrate LZ4KD without the legacy Crypto API patch stack.
+          if [ "${{ inputs.kernel_version }}" = "6.12" ]; then
+            bash "$ZZH_PATCHES/zram/apply_lz4kd_6_12.sh" "$SUKISU_PATCHES"
+            exit 0
+          fi
+
           # 第一阶段：升级 LZ4 到 1.10.0 并添加 ARM64 NEON 加速
           echo "升级 LZ4..."
           rm -f lib/lz4/lz4_compress.c lib/lz4/lz4_decompress.c lib/lz4/lz4defs.h lib/lz4/lz4hc_compress.c
@@ -1324,6 +1339,17 @@ jobs:
         if: inputs.clean_build != true && inputs.use_zram
         run: |
           CONFIG_FILE="$DEFCONFIG"
+
+          # 6.12 Image-only builds need the new backend in the Image itself.
+          # Keep the existing LZO/LZ4/ZSTD backends available as well.
+          if [ "${{ inputs.kernel_version }}" = "6.12" ]; then
+            "$KERNEL_ROOT/common/scripts/config" --file "$CONFIG_FILE" \
+              --enable ZRAM --enable ZSMALLOC \
+              --enable ZRAM_BACKEND_LZ4KD --enable ZRAM_DEF_COMP_LZ4KD
+            sed -i '/"drivers\/block\/zram\/zram\.ko",/d; /"mm\/zsmalloc\.ko",/d' \
+              "$KERNEL_ROOT/common/modules.bzl"
+            exit 0
+          fi
 
           # 5.10 需要额外基础配置
           if [ "${{ inputs.kernel_version }}" = "5.10" ]; then
@@ -1825,6 +1851,26 @@ jobs:
               exit 1
             fi
           fi
+
+      - name: 验证 6.12 LZ4KD 配置
+        if: inputs.clean_build != true && inputs.use_zram && inputs.kernel_version == '6.12'
+        run: |
+          FINAL_CONFIG="$RUNNER_TEMP/${CONFIG}-lz4kd.config"
+          "$KERNEL_ROOT/common/scripts/extract-ikconfig" \
+            "$KERNEL_ROOT/bazel-bin/common/kernel_aarch64/Image" > "$FINAL_CONFIG"
+          for required in \
+            'CONFIG_ARM64_4K_PAGES=y' \
+            'CONFIG_ZRAM=y' \
+            'CONFIG_ZSMALLOC=y' \
+            'CONFIG_ZRAM_BACKEND_LZ4KD=y' \
+            'CONFIG_LZ4KD_COMPRESS=y' \
+            'CONFIG_LZ4KD_DECOMPRESS=y' \
+            'CONFIG_ZRAM_DEF_COMP="lz4kd"'; do
+            grep -qFx "$required" "$FINAL_CONFIG" || {
+              echo "::error::Missing LZ4KD configuration: $required"
+              exit 1
+            }
+          done
 
       # ==================== 准备内核 Image ====================
       # 复制编译产物到工作目录，供 AnyKernel3 打包使用
