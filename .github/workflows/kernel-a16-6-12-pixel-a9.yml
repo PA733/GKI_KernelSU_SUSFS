@@ -26,7 +26,7 @@ on:
         type: boolean
         default: false
       use_zram:
-        description: "启用内建 ZRAM 与 LZ4KD（4 KiB 页）"
+        description: "构建 LZ4KD 模块（须配套更新 vendor_kernel_boot，4 KiB 页）"
         required: true
         type: boolean
         default: false

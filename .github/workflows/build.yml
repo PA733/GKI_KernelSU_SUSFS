@@ -1340,14 +1340,21 @@ jobs:
         run: |
           CONFIG_FILE="$DEFCONFIG"
 
-          # 6.12 Image-only builds need the new backend in the Image itself.
-          # Keep the existing LZO/LZ4/ZSTD backends available as well.
+          # Pixel loads zsmalloc and its vendor ZRAM from vendor_kernel_boot.
+          # Keep ZSMALLOC modular and ship a matching replacement zram.ko;
+          # built-in ZSMALLOC conflicts with the stock module's exported symbols.
           if [ "${{ inputs.kernel_version }}" = "6.12" ]; then
             "$KERNEL_ROOT/common/scripts/config" --file "$CONFIG_FILE" \
-              --enable ZRAM --enable ZSMALLOC \
               --enable ZRAM_BACKEND_LZ4KD --enable ZRAM_DEF_COMP_LZ4KD
-            sed -i '/"drivers\/block\/zram\/zram\.ko",/d; /"mm\/zsmalloc\.ko",/d' \
-              "$KERNEL_ROOT/common/modules.bzl"
+            if [ "${{ inputs.pixel_a9_compat }}" = "true" ]; then
+              "$KERNEL_ROOT/common/scripts/config" --file "$CONFIG_FILE" \
+                --module ZRAM --module ZSMALLOC
+            else
+              "$KERNEL_ROOT/common/scripts/config" --file "$CONFIG_FILE" \
+                --enable ZRAM --enable ZSMALLOC
+              sed -i '/"drivers\/block\/zram\/zram\.ko",/d; /"mm\/zsmalloc\.ko",/d' \
+                "$KERNEL_ROOT/common/modules.bzl"
+            fi
             exit 0
           fi
 
@@ -1774,6 +1781,8 @@ jobs:
             'CONFIG_TRIM_UNUSED_KSYMS=y' \
             'CONFIG_MODVERSIONS=y' \
             'CONFIG_GENDWARFKSYMS=y' \
+            'CONFIG_ZRAM=m' \
+            'CONFIG_ZSMALLOC=m' \
             'CONFIG_LOCALVERSION="-4k"'; do
             grep -qFx "$required" "$FINAL_CONFIG" || { echo "::error::Missing stock-compatible config: $required"; exit 1; }
           done
@@ -1858,10 +1867,12 @@ jobs:
           FINAL_CONFIG="$RUNNER_TEMP/${CONFIG}-lz4kd.config"
           "$KERNEL_ROOT/common/scripts/extract-ikconfig" \
             "$KERNEL_ROOT/bazel-bin/common/kernel_aarch64/Image" > "$FINAL_CONFIG"
+          ZRAM_LINKAGE=y
+          [ "${{ inputs.pixel_a9_compat }}" = "true" ] && ZRAM_LINKAGE=m
           for required in \
             'CONFIG_ARM64_4K_PAGES=y' \
-            'CONFIG_ZRAM=y' \
-            'CONFIG_ZSMALLOC=y' \
+            "CONFIG_ZRAM=$ZRAM_LINKAGE" \
+            "CONFIG_ZSMALLOC=$ZRAM_LINKAGE" \
             'CONFIG_ZRAM_BACKEND_LZ4KD=y' \
             'CONFIG_LZ4KD_COMPRESS=y' \
             'CONFIG_LZ4KD_DECOMPRESS=y' \
@@ -1883,6 +1894,22 @@ jobs:
           fi
 
           cp "$SRC_DIR/Image" ./
+
+      - name: 导出 Pixel LZ4KD 配套模块
+        if: inputs.pixel_a9_compat && inputs.clean_build != true && inputs.use_zram
+        shell: bash
+        run: |
+          set -euo pipefail
+          BUNDLE="$GITHUB_WORKSPACE/pixel-zram-bundle"
+          mkdir -p "$BUNDLE"
+          MODULE="$(find -L "$KERNEL_ROOT/bazel-bin/common/kernel_aarch64" -type f -name zram.ko -print -quit)"
+          [ -n "$MODULE" ] || { echo "::error::Missing matching zram.ko"; exit 1; }
+          cp "$MODULE" "$BUNDLE/zram.ko"
+          cp Image "$BUNDLE/Image"
+          cp "$RUNNER_TEMP/${CONFIG}-lz4kd.config" "$BUNDLE/kernel.config"
+          cp "$KERNEL_ROOT/bazel-bin/common/kernel_aarch64/vmlinux.symvers" "$BUNDLE/vmlinux.symvers"
+          echo "Pixel LZ4KD requires the matching vendor_kernel_boot module replacement."
+          echo "Installing Image alone retains the stock Pixel ZRAM backend."
 
       # ==================== 构建匹配的 GKI system_dlkm 分发 ====================
       - name: 构建匹配的 GKI system_dlkm 分发
@@ -2155,6 +2182,14 @@ jobs:
           compression-level: 0
 
       # ==================== 上传构建产物 ====================
+      - name: 上传 Pixel LZ4KD 配套模块
+        if: inputs.pixel_a9_compat && inputs.clean_build != true && inputs.use_zram
+        uses: actions/upload-artifact@v6
+        with:
+          name: ${{ env.BUILD_VARIANT }}_kernel-${{ env.CONFIG }}-pixel-zram
+          path: pixel-zram-bundle/
+          if-no-files-found: error
+
       # AnyKernel3 包本身已是 zip，upload-artifact 会再套一层 zip 容器
       # compression-level=0 关闭外层压缩，避免对已压缩的 AK3 二次压缩
       - name: 上传构建产物
