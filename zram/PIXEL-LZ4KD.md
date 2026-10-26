@@ -26,7 +26,7 @@ python3 prepare_pixel_zram.py \
 
 将两个匹配的镜像安装到已确认的同一 slot。必须配对更新：新 `zram.ko` 的签名与符号依赖来自该次编译的内核。不要只更新 `vendor_kernel_boot`。
 
-在 ReSukiSU 中安装 `pixel-lz4kd-config.zip`。配置模块在 `post-fs-data` 阶段检测 `lz4kd` 是否可用，仅在 ZRAM 尚未初始化时设置 `mmd.zram.comp_algorithm=lz4kd`。它不会对已启用的 swap 执行 reset 或 swapoff；回退到不含 LZ4KD 的原厂模块时不修改属性。
+可提前在 ReSukiSU 中安装 `pixel-lz4kd-config.zip`，使配对镜像第一次启动时就选择 LZ4KD。配置模块在 `post-fs-data` 阶段检测 `lz4kd` 是否可用，仅在 ZRAM 尚未初始化时设置 `mmd.zram.comp_algorithm=lz4kd`。它不会对已启用的 swap 执行 reset 或 swapoff；回退到不含 LZ4KD 的原厂模块时不修改属性。
 
 重启后检查：
 
