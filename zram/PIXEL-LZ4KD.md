@@ -41,6 +41,8 @@ cat /data/adb/modules/pixel_lz4kd_config/last-status.txt
 
 应看到系统启动完成、mmd 初始化成功、`[lz4kd]` 及已启用的 zram swap。若算法未选中，先检查配置模块状态和系统属性；不要直接重置正在使用的 swap。
 
+此方案使用 GKI 通用 ZRAM 前端。Pixel 原厂独有的 `slowpath_comp_algorithm`、`algo_interleave` 等接口不保留；需要在设备上验证 mmd 初始化、swap 和 writeback 状态。
+
 ## 回退
 
 向原 slot 恢复保存的 `boot-stock.img` 和 `vendor_kernel_boot-stock.img`，并禁用或卸载算法配置模块。系统 OTA 后需基于新版本的原始镜像重新适配，不能复用旧 `vendor_kernel_boot`。
