@@ -28,7 +28,7 @@ python3 prepare_pixel_zram.py \
 
 可提前在 ReSukiSU 中安装 `pixel-lz4kd-config.zip`，使配对镜像第一次启动时就选择 LZ4KD。配置模块在 `post-fs-data` 阶段检测 `lz4kd` 是否可用，仅在 ZRAM 尚未初始化时设置 `mmd.zram.comp_algorithm=lz4kd`。它不会对已启用的 swap 执行 reset 或 swapoff；回退到不含 LZ4KD 的原厂模块时不修改属性。
 
-重启后检查：
+重启后在 `su` 的 root shell 中检查：
 
 ```sh
 getprop sys.boot_completed
@@ -40,6 +40,8 @@ cat /data/adb/modules/pixel_lz4kd_config/last-status.txt
 ```
 
 应看到系统启动完成、mmd 初始化成功、`[lz4kd]` 及已启用的 zram swap。若算法未选中，先检查配置模块状态和系统属性；不要直接重置正在使用的 swap。
+
+如果手动写入 `comp_algorithm` 失败，检查 `cat /sys/block/zram0/initstate`。值为 `1` 时，内核会以 `EBUSY` 拒绝切换已经初始化的压缩实例；此时修改 `mmd.zram.comp_algorithm` 属性也不会切换当前 swap。应将 ZIP 正式安装为 ReSukiSU 模块并重启，让 `post-fs-data.sh` 在 mmd 初始化前运行。
 
 此方案使用 GKI 通用 ZRAM 前端。Pixel 原厂独有的 `slowpath_comp_algorithm`、`algo_interleave` 等接口不保留；需要在设备上验证 mmd 初始化、swap 和 writeback 状态。
 
