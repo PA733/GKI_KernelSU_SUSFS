@@ -10,6 +10,7 @@ import unittest
 from scripts.prepare_pixel_zram import (
     Entry, Elf, LEGACY_LZ4, align, lz4, make_boot, make_vendor_boot,
     padded, patch_ramdisk, read_cpio, vendor_parts, write_cpio, verify_module_signature,
+    avb_metadata, refresh_avb_footer,
 )
 
 
@@ -158,7 +159,8 @@ class ModuleSignatureTests(unittest.TestCase):
 
 @unittest.skipUnless(shutil.which("lz4"), "lz4 command required")
 class BootImageTests(unittest.TestCase):
-    def vendor_image(self):
+    @staticmethod
+    def vendor_image():
         header = bytearray(2128)
         header[:8] = b"VNDRBOOT"
         ramdisk = lz4(write_cpio(stock_entries()))
@@ -218,6 +220,45 @@ class BootImageTests(unittest.TestCase):
                 self.assertEqual(struct.unpack_from("<I", result, 1580)[0], 0)
                 self.assertNotIn(b"obsolete signature", result)
                 self.assertEqual(len(result), len(original))
+
+
+AVBTOOL = os.environ.get("AVBTOOL") or shutil.which("avbtool")
+
+
+@unittest.skipUnless(AVBTOOL and Path(AVBTOOL).is_file() and shutil.which("lz4"), "avbtool and lz4 required")
+class AvbMetadataTests(unittest.TestCase):
+    def setUp(self):
+        temp = tempfile.TemporaryDirectory()
+        self.addCleanup(temp.cleanup)
+        self.root = Path(temp.name)
+        original = BootImageTests.vendor_image()
+        header, page, parts = vendor_parts(original)
+        size = align(len(header), page) + sum(align(len(x), page) for x in parts)
+        path = self.root / "vendor_kernel_boot.img"
+        path.write_bytes(original[:size])
+        self.tool = Path(AVBTOOL)
+        subprocess.run([str(self.tool), "add_hash_footer", "--image", str(path),
+                        "--partition_name", "vendor_kernel_boot", "--partition_size", str(1024 * 1024),
+                        "--algorithm", "NONE", "--rollback_index", "1700000000",
+                        "--prop", "com.android.build.vendor_kernel_boot.fingerprint:test/device:17/build:user",
+                        "--salt", "aa" * 32], check=True, capture_output=True)
+        self.original = path.read_bytes()
+
+    def test_footer_refresh_preserves_metadata_and_verifies_new_hash(self):
+        entries = read_cpio(lz4(vendor_parts(self.original)[2][0], True))
+        changed = write_cpio(patch_ramdisk(entries, b"replacement module"))
+        patched = make_vendor_boot(self.original, changed)
+        result = refresh_avb_footer(patched, self.original, "vendor_kernel_boot", self.tool)
+        self.assertEqual(len(result), len(self.original))
+        self.assertNotEqual(result, self.original)
+        metadata = avb_metadata(result, "vendor_kernel_boot")
+        self.assertEqual(metadata, avb_metadata(self.original, "vendor_kernel_boot"))
+        self.assertEqual(metadata["rollback"], 1700000000)
+        self.assertEqual(metadata["props"], ["com.android.build.vendor_kernel_boot.fingerprint:test/device:17/build:user"])
+
+    def test_wrong_partition_backup_is_rejected(self):
+        with self.assertRaisesRegex(ValueError, "does not match"):
+            avb_metadata(self.original, "boot")
 
 
 if __name__ == "__main__":

@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Prepare Pixel A9 LZ4KD images from a matching CI bundle and stock backups.
 
-Requires lz4 and openssl. This tool writes local files only; it never flashes a
+Requires lz4, openssl, and the bundled avbtool. This tool writes local files only; it never flashes a
 device. Outputs are unsigned images for an unlocked bootloader. Keep both stock
 boot and vendor_kernel_boot backups: the replacement module and kernel are a pair.
 """
@@ -15,6 +15,7 @@ from pathlib import Path
 import re
 import struct
 import subprocess
+import sys
 import tempfile
 import zlib
 
@@ -330,6 +331,81 @@ def make_boot(original, image):
     return result + bytes(len(original) - len(result))
 
 
+def avb_metadata(image, partition):
+    if image[-64:-60] != b"AVBf":
+        raise ValueError("Stock partition backup has no AVB footer")
+    offset, size = struct.unpack_from(">QQ", image, len(image) - 64 + 20)
+    header = image[offset:offset + 256]
+    if header[:4] != b"AVB0" or offset + size > len(image) - 64:
+        raise ValueError("Invalid stock AVB metadata")
+    auth_size, aux_size = struct.unpack_from(">QQ", header, 12)
+    desc_offset, desc_size = struct.unpack_from(">QQ", header, 96)
+    rollback, flags, rollback_location = struct.unpack_from(">QII", header, 112)
+    if flags or desc_offset + desc_size > aux_size:
+        raise ValueError("Unsupported stock AVB flags or descriptor range")
+    start = offset + 256 + auth_size + desc_offset
+    end = start + desc_size
+    if end > offset + size:
+        raise ValueError("Truncated stock AVB descriptors")
+    metadata = {"rollback": rollback, "rollback_location": rollback_location, "props": []}
+    hashes = 0
+    while start < end:
+        tag, following = struct.unpack_from(">QQ", image, start)
+        descriptor = image[start:start + 16 + following]
+        if start + len(descriptor) > end or len(descriptor) != 16 + following:
+            raise ValueError("Truncated AVB descriptor")
+        if tag == 0:  # AvbPropertyDescriptor
+            key_size, value_size = struct.unpack_from(">QQ", descriptor, 16)
+            if 34 + key_size + value_size > len(descriptor) or descriptor[32 + key_size] or descriptor[33 + key_size + value_size]:
+                raise ValueError("Malformed AVB property")
+            key = descriptor[32:32 + key_size].decode()
+            value = descriptor[33 + key_size:33 + key_size + value_size].decode()
+            if "\0" in key or "\0" in value or ":" in key:
+                raise ValueError("Unsupported binary AVB property")
+            metadata["props"].append(f"{key}:{value}")
+        elif tag == 2:  # AvbHashDescriptor
+            name_size, salt_size, _, hash_flags = struct.unpack_from(">4I", descriptor, 56)
+            name = descriptor[132:132 + name_size].decode()
+            if name != partition or hash_flags not in (0, 1):
+                raise ValueError("AVB hash descriptor does not match the supplied partition")
+            metadata.update(hash_algorithm=descriptor[24:56].rstrip(b"\0").decode(),
+                            salt=descriptor[132 + name_size:132 + name_size + salt_size].hex(),
+                            do_not_use_ab=bool(hash_flags))
+            hashes += 1
+        else:
+            raise ValueError(f"Unsupported AVB descriptor tag {tag}")
+        start += 16 + following
+    if hashes != 1:
+        raise ValueError("Expected one stock partition hash descriptor")
+    return metadata
+
+
+def refresh_avb_footer(patched, original, partition, avbtool):
+    metadata = avb_metadata(original, partition)
+    if partition == "boot":
+        kernel, ramdisk = struct.unpack_from("<2I", patched, 8)
+        payload_size = 4096 + align(kernel, 4096) + align(ramdisk, 4096)
+    else:
+        header, page, parts = vendor_parts(patched)
+        payload_size = align(len(header), page) + sum(align(len(p), page) for p in parts)
+    with tempfile.TemporaryDirectory(prefix="pixel-avb-") as temp:
+        path = Path(temp) / f"{partition}.img"
+        path.write_bytes(patched[:payload_size])
+        command = ([sys.executable, str(avbtool)] if avbtool.suffix == ".py" else [str(avbtool)])
+        args = command + ["add_hash_footer", "--image", str(path), "--partition_name", partition,
+                          "--partition_size", str(len(original)), "--algorithm", "NONE",
+                          "--hash_algorithm", metadata["hash_algorithm"], "--salt", metadata["salt"],
+                          "--rollback_index", str(metadata["rollback"]),
+                          "--rollback_index_location", str(metadata["rollback_location"])]
+        if metadata["do_not_use_ab"]:
+            args.append("--do_not_use_ab")
+        for prop in metadata["props"]:
+            args += ["--prop", prop]
+        subprocess.run(args, check=True, capture_output=True)
+        subprocess.run(command + ["verify_image", "--image", str(path)], check=True, capture_output=True)
+        return path.read_bytes()
+
+
 def sha256(data):
     return hashlib.sha256(data).hexdigest()
 
@@ -339,6 +415,7 @@ def main():
     parser.add_argument("--bundle", type=Path, required=True)
     parser.add_argument("--vendor-kernel-boot", type=Path, required=True)
     parser.add_argument("--boot", type=Path, help="Optional stock/working boot partition backup")
+    parser.add_argument("--avbtool", type=Path, help="Override bundled avbtool (binary or avbtool.py)")
     parser.add_argument("--output", type=Path, required=True, help="New, nonexistent output directory")
     args = parser.parse_args()
     if args.output.exists():
@@ -350,15 +427,21 @@ def main():
         stock_zsmalloc = next(e.data for e in entries if e.name.removeprefix("./") == "lib/modules/zsmalloc.ko")
         image = (args.bundle / "Image").read_bytes()
         module = (args.bundle / "zram.ko").read_bytes()
+        avbtool = (args.avbtool or args.bundle / "avbtool").resolve()
+        if not args.avbtool:
+            # GitHub artifact downloads reset executable permissions.
+            avbtool.chmod(avbtool.stat().st_mode | 0o100)
         release = validate_module(module, stock_zsmalloc, image, (args.bundle / "vmlinux.symvers").read_text())
         changed = write_cpio(patch_ramdisk(entries, module))
         vendor = make_vendor_boot(original, changed)
         # Round-trip the actual compressed image before writing any outputs.
         assert lz4(vendor_parts(vendor)[2][0], decompress=True) == changed
+        vendor = refresh_avb_footer(vendor, original, "vendor_kernel_boot", avbtool)
         outputs = {"vendor_kernel_boot-stock.img": original, "vendor_kernel_boot-lz4kd.img": vendor}
         if args.boot:
             stock_boot = args.boot.read_bytes()
-            outputs.update({"boot-stock.img": stock_boot, "boot-lz4kd.img": make_boot(stock_boot, image)})
+            boot = refresh_avb_footer(make_boot(stock_boot, image), stock_boot, "boot", avbtool)
+            outputs.update({"boot-stock.img": stock_boot, "boot-lz4kd.img": boot})
         report = {"kernel_release": release, "image_sha256": sha256(image),
                   "zram_module_sha256": sha256(module),
                   "files": {name: sha256(data) for name, data in outputs.items()}}

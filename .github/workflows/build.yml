@@ -1916,6 +1916,7 @@ jobs:
           cp "$RUNNER_TEMP/${CONFIG}-lz4kd.config" "$BUNDLE/kernel.config"
           cp "$KERNEL_ROOT/bazel-bin/common/kernel_aarch64/vmlinux.symvers" "$BUNDLE/vmlinux.symvers"
           cp "$GITHUB_WORKSPACE/scripts/prepare_pixel_zram.py" "$BUNDLE/"
+          cp "$AVBTOOL" "$BUNDLE/avbtool"
           cp "$GITHUB_WORKSPACE/zram/PIXEL-LZ4KD.md" "$BUNDLE/README.md"
           (cd "$GITHUB_WORKSPACE/zram/pixel-module" && zip -r "$BUNDLE/pixel-lz4kd-config.zip" .)
           echo "Pixel LZ4KD requires the matching vendor_kernel_boot module replacement."

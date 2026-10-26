@@ -18,7 +18,7 @@ python3 prepare_pixel_zram.py \
   --output ./pixel-lz4kd-images
 ```
 
-工具只生成本地文件，不会连接或刷写设备。它支持 Android boot v4 和单 ramdisk fragment 的 Pixel vendor_boot v4，保留原有 kernel 压缩方式。输出不保留已失效的旧 AVB/GKI 签名，仅用于已解锁设备。
+工具只生成本地文件，不会连接或刷写设备。它支持 Android boot v4 和单 ramdisk fragment 的 Pixel vendor_boot v4，保留原有 kernel 压缩方式。工具通过配套的 Linux x86-64 `avbtool` 重建并校验 AVB 哈希页脚，保留原始 fingerprint 等属性与 rollback index；也可用 `--avbtool /path/to/avbtool.py` 指定 AOSP 工具。输出不保留已失效的旧 AVB/GKI 签名，仅用于已解锁设备，不修改主 vbmeta 分区。
 
 输出目录包含 `boot-lz4kd.img`、`vendor_kernel_boot-lz4kd.img`、原始镜像副本及 SHA-256 清单。`--boot` 可省略，此时仅生成配套 `vendor_kernel_boot`，内核需通过同一次 CI 构建的 AnyKernel3 包安装。
 
