@@ -248,7 +248,7 @@ jobs:
       - name: 安装编译依赖
         run: |
           sudo apt-get update
-          sudo apt-get install -y ccache python3 git curl build-essential libssl-dev bison flex libelf-dev dwarves lz4
+          sudo apt-get install -y ccache python3 python3-pip git curl build-essential libssl-dev bison flex libelf-dev dwarves lz4
 
       # ==================== 配置 ccache ====================
       # ccache 用于缓存编译结果，加速后续构建
@@ -1253,6 +1253,9 @@ jobs:
           # and integrate LZ4KD without the legacy Crypto API patch stack.
           if [ "${{ inputs.kernel_version }}" = "6.12" ]; then
             bash "$ZZH_PATCHES/zram/apply_lz4kd_6_12.sh" "$SUKISU_PATCHES"
+            python3 -m pip install --target "$RUNNER_TEMP/lz4kd-kconfiglib" kconfiglib==14.1.0
+            PYTHONPATH="$RUNNER_TEMP/lz4kd-kconfiglib" python3 \
+              "$GITHUB_WORKSPACE/tests/check_lz4kd_linkage.py" .
             exit 0
           fi
 
