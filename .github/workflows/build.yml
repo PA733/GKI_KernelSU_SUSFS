@@ -126,7 +126,7 @@ jobs:
     name: "${{ inputs.kernel_version }}.${{ inputs.sub_level }}-${{ inputs.android_version }}-${{ inputs.os_patch_level }}${{ inputs.revision && format('-{0}', inputs.revision) || '' }}-${{ inputs.clean_build && 'Clean' || inputs.ksu_variant }}"
     runs-on: ubuntu-latest
     # Bypass 模式包含第二次构建，并保留每次构建的超时重试空间。
-    timeout-minutes: ${{ inputs.build_bypass && 180 || 60 }}
+    timeout-minutes: ${{ inputs.build_bypass && 180 || inputs.pixel_a9_compat && 90 || 60 }}
 
     # ==================== 环境变量配置 ====================
     # ccache 配置用于加速重复编译
