@@ -1,12 +1,13 @@
 #!/usr/bin/env python3
 """Prepare Pixel A9 LZ4KD images from a matching CI bundle and stock backups.
 
-Requires the lz4 command. This tool writes local files only; it never flashes a
+Requires lz4 and openssl. This tool writes local files only; it never flashes a
 device. Outputs are unsigned images for an unlocked bootloader. Keep both stock
 boot and vendor_kernel_boot backups: the replacement module and kernel are a pair.
 """
 
 import argparse
+import base64
 from dataclasses import dataclass
 import hashlib
 import json
@@ -14,6 +15,7 @@ from pathlib import Path
 import re
 import struct
 import subprocess
+import tempfile
 import zlib
 
 
@@ -191,6 +193,53 @@ class Elf:
         return result
 
 
+def verify_module_signature(module, image):
+    magic = b"~Module signature appended~\n"
+    if not module.endswith(magic):
+        raise ValueError("Expected the CI-signed GKI zram.ko")
+    header_end = len(module) - len(magic)
+    header_start = header_end - 12
+    header = module[header_start:header_end]
+    size = int.from_bytes(header[8:12], "big")
+    if len(header) != 12 or header[2] != 2 or header[3:8] != bytes(5) or not 0 < size <= header_start:
+        raise ValueError("Unsupported kernel module signature format")
+    signature_start = header_start - size
+
+    # DER X.509 certificates have a TBS sequence, signature algorithm sequence,
+    # and signature BIT STRING. Locate embedded certificates without an ELF
+    # vmlinux or third-party Python ASN.1 dependency, then let OpenSSL parse them.
+    certs = set()
+    for match in re.finditer(rb"\x30\x82..\x30\x82", image, re.DOTALL):
+        start = match.start()
+        size = int.from_bytes(image[start + 2:start + 4], "big") + 4
+        cert = image[start:start + size]
+        if not 512 <= size <= 8192 or len(cert) != size or cert[8] not in (0xa0, 2):
+            continue
+        algorithm = 8 + int.from_bytes(cert[6:8], "big")
+        if algorithm + 2 >= size or cert[algorithm] != 0x30 or cert[algorithm + 1] >= 128:
+            continue
+        signature = algorithm + 2 + cert[algorithm + 1]
+        if signature < size and cert[signature] == 3:
+            certs.add(cert)
+    if not certs:
+        raise ValueError("No embedded signing certificates found in Image")
+    with tempfile.TemporaryDirectory(prefix="pixel-module-signature-") as temp:
+        root = Path(temp)
+        (root / "module").write_bytes(module[:signature_start])
+        (root / "signature.der").write_bytes(module[signature_start:header_start])
+        (root / "certificates.pem").write_bytes(b"".join(
+            b"-----BEGIN CERTIFICATE-----\n" + base64.encodebytes(cert) + b"-----END CERTIFICATE-----\n"
+            for cert in sorted(certs)
+        ))
+        result = subprocess.run([
+            "openssl", "cms", "-verify", "-binary", "-inform", "DER", "-noverify", "-nointern",
+            "-in", str(root / "signature.der"), "-content", str(root / "module"),
+            "-certfile", str(root / "certificates.pem"), "-out", str(root / "verified"),
+        ], capture_output=True)
+        if result.returncode:
+            raise ValueError("Module signature does not verify against certificates embedded in Image")
+
+
 def validate_module(module, stock_zsmalloc, image, symvers):
     new, stock = Elf(module), Elf(stock_zsmalloc)
     info, stock_info = new.info(), stock.info()
@@ -201,8 +250,6 @@ def validate_module(module, stock_zsmalloc, image, symvers):
         raise ValueError("Kernel and module release do not match")
     if info.get("name") != "zram" or info.get("depends") != "zsmalloc":
         raise ValueError("Expected zram.ko with only zsmalloc as its module dependency")
-    if not module.endswith(b"~Module signature appended~\n"):
-        raise ValueError("Expected the CI-signed GKI zram.ko")
     kernel_exports = {parts[1]: int(parts[0], 16) for line in symvers.splitlines() if len(parts := line.split()) >= 2}
     exports = kernel_exports | stock.exports()
     for symbol, expected in new.imports().items():
@@ -215,6 +262,7 @@ def validate_module(module, stock_zsmalloc, image, symvers):
                      "CONFIG_MODULE_SIG_PROTECT=y", "CONFIG_ARM64_4K_PAGES=y"):
         if required not in config:
             raise ValueError(f"Image configuration missing: {required}")
+    verify_module_signature(module, image)
     return release[1].decode()
 
 

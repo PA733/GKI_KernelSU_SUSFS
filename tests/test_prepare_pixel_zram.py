@@ -9,7 +9,7 @@ import unittest
 
 from scripts.prepare_pixel_zram import (
     Entry, Elf, LEGACY_LZ4, align, lz4, make_boot, make_vendor_boot,
-    padded, patch_ramdisk, read_cpio, vendor_parts, write_cpio,
+    padded, patch_ramdisk, read_cpio, vendor_parts, write_cpio, verify_module_signature,
 )
 
 
@@ -118,6 +118,42 @@ class SelectionModuleTests(unittest.TestCase):
         root, sysfs = self.run_module("lzo [lz4] lz4kd\n", 1)
         self.assertFalse((root / "property-call").exists())
         self.assertEqual((sysfs / "comp_algorithm").read_text(), "lzo [lz4] lz4kd\n")
+
+
+@unittest.skipUnless(shutil.which("openssl"), "openssl command required")
+class ModuleSignatureTests(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        cls.temp = tempfile.TemporaryDirectory()
+        cls.addClassCleanup(cls.temp.cleanup)
+        root = Path(cls.temp.name)
+        cls.certificates = []
+        for name in ("matching", "other"):
+            subprocess.run(["openssl", "req", "-new", "-newkey", "rsa:2048", "-nodes", "-x509",
+                            "-days", "1", "-subj", f"/CN={name}", "-keyout", str(root / f"{name}.key"),
+                            "-out", str(root / f"{name}.pem")], check=True, capture_output=True)
+            cls.certificates.append(subprocess.check_output([
+                "openssl", "x509", "-in", str(root / f"{name}.pem"), "-outform", "DER"]))
+        payload = b"module content for signature regression"
+        (root / "payload").write_bytes(payload)
+        subprocess.run(["openssl", "cms", "-sign", "-binary", "-nocerts", "-noattr",
+                        "-in", str(root / "payload"), "-signer", str(root / "matching.pem"),
+                        "-inkey", str(root / "matching.key"), "-outform", "DER",
+                        "-out", str(root / "signature")], check=True, capture_output=True)
+        signature = (root / "signature").read_bytes()
+        header = bytes([0, 0, 2, 0, 0, 0, 0, 0]) + len(signature).to_bytes(4, "big")
+        cls.module = payload + signature + header + b"~Module signature appended~\n"
+
+    def test_matching_embedded_certificate_verifies(self):
+        verify_module_signature(self.module, b"Image prefix" + self.certificates[0])
+
+    def test_different_build_key_is_rejected(self):
+        with self.assertRaisesRegex(ValueError, "does not verify"):
+            verify_module_signature(self.module, b"Image prefix" + self.certificates[1])
+
+    def test_modified_module_is_rejected(self):
+        with self.assertRaisesRegex(ValueError, "does not verify"):
+            verify_module_signature(b"X" + self.module[1:], self.certificates[0])
 
 
 @unittest.skipUnless(shutil.which("lz4"), "lz4 command required")

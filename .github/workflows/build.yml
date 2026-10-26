@@ -248,7 +248,7 @@ jobs:
       - name: 安装编译依赖
         run: |
           sudo apt-get update
-          sudo apt-get install -y ccache python3 git curl build-essential libssl-dev bison flex libelf-dev dwarves
+          sudo apt-get install -y ccache python3 git curl build-essential libssl-dev bison flex libelf-dev dwarves lz4
 
       # ==================== 配置 ccache ====================
       # ccache 用于缓存编译结果，加速后续构建
@@ -370,6 +370,10 @@ jobs:
         run: |
           python3 "$GITHUB_WORKSPACE/tests/check_lz4kd_backend.py" \
             "$SUKISU_PATCHES/other/zram/lz4k"
+
+      - name: 测试 Pixel LZ4KD 配套工具
+        if: inputs.pixel_a9_compat && inputs.clean_build != true && inputs.use_zram
+        run: python3 -m unittest discover -s tests -v
 
       # ==================== 初始化并同步内核源码 ====================
       # 使用 repo 工具从 AOSP 获取 GKI 内核源码

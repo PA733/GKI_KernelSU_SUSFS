@@ -2,13 +2,13 @@
 
 Pixel 的 ZRAM 位于 `vendor_kernel_boot`，由 `zram_gs.ko` 和 `zcomp_gs_cpu.ko` 实现。通用 GKI 的 ZRAM 配置不会给这两个原厂模块增加算法。将 ZSMALLOC 改为内建还会与原厂 `zsmalloc.ko` 重复导出符号，导致第一阶段启动失败。
 
-修复构建保留 ZRAM/ZSMALLOC 的模块形式，并输出同一次编译的 `Image`、签名 `zram.ko` 和 `vmlinux.symvers`。配套工具将原厂 ramdisk 中的两个 ZRAM 模块替换成新的 `zram.ko`，保留原厂 `zsmalloc.ko`、DTB、其他驱动及镜像元数据。它会验证内核版本、模块依赖与导入符号 CRC；遇到其他驱动依赖原厂 ZRAM 时拒绝修改。
+修复构建保留 ZRAM/ZSMALLOC 的模块形式，并输出同一次编译的 `Image`、签名 `zram.ko` 和 `vmlinux.symvers`。配套工具将原厂 ramdisk 中的两个 ZRAM 模块替换成新的 `zram.ko`，保留原厂 `zsmalloc.ko`、DTB、其他驱动及镜像元数据。它会验证内核版本、模块依赖与导入符号 CRC，并使用 Image 中嵌入的证书验证模块签名；遇到其他驱动依赖原厂 ZRAM 时拒绝修改。
 
 ## 准备
 
 适用于本仓库 Pixel A9 固定生产快照、4 KiB 页、已解锁的设备。先保存当前系统版本的完整 `boot` 和 `vendor_kernel_boot` 分区备份，确认当前 slot。不要混用其他系统版本的镜像，也不要覆盖原始备份。
 
-触发 Pixel 工作流，设置 `clean_build=false`、`use_zram=true`。下载名称以 `-pixel-zram` 结尾的配套产物，解压为一个目录。在安装了 Python 3 和 `lz4` 命令的 Linux 主机上运行：
+触发 Pixel 工作流，设置 `clean_build=false`、`use_zram=true`。下载名称以 `-pixel-zram` 结尾的配套产物，解压为一个目录。在安装了 Python 3、`lz4` 和 `openssl` 命令的 Linux 主机上运行：
 
 ```sh
 python3 prepare_pixel_zram.py \
