@@ -1,0 +1,6 @@
+id=pixel_lz4kd_config
+name=Pixel LZ4KD selection
+version=1.0
+versionCode=1
+author=PA733
+description=Select LZ4KD for mmd when the matching Pixel ZRAM module is installed. Leaves stock kernels unchanged.

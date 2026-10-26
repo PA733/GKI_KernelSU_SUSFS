@@ -50,7 +50,9 @@
 
 > **Android 16：已支持 Android 16 - 6.12 内核版本**
 
-Android 16 / 6.12 的 `use_zram` 使用原生 ZRAM LZ4KD 后端，支持 ARM64 4 KiB 页（包括 Pixel A9 固定版本）。构建时设置 `clean_build=false`、`use_zram=true`，会将 ZRAM/ZSMALLOC 内建并把默认压缩算法设为 `lz4kd`，同时保留原有 LZO/LZ4/ZSTD 后端。算法源码来自工作流下载的 `SukiSU_patch/other/zram/lz4k`；6.12 使用本仓库的专用接入补丁。
+Android 16 / 6.12 的 `use_zram` 使用原生 ZRAM LZ4KD 后端，支持 ARM64 4 KiB 页。构建时设置 `clean_build=false`、`use_zram=true`，同时保留原有 LZO/LZ4/ZSTD 后端。算法源码来自工作流下载的 `SukiSU_patch/other/zram/lz4k`；6.12 使用本仓库的专用接入补丁。
+
+Pixel A9 使用原厂 `zsmalloc.ko`、`zram_gs.ko` 和 `zcomp_gs_cpu.ko`，不能将 ZRAM/ZSMALLOC 改为内建后只替换 boot：这会导致原厂模块重复导出符号并卡在第一阶段启动。Pixel 构建保留 `CONFIG_ZRAM=m`、`CONFIG_ZSMALLOC=m`，额外导出匹配的 LZ4KD `zram.ko`；需要同步更新 `vendor_kernel_boot` 并配置系统选择算法，操作及回退方式见 [Pixel LZ4KD 配套镜像](zram/PIXEL-LZ4KD.md)。单独安装内核 Image 会继续使用原厂 ZRAM。其他 6.12 构建维持内建方案。
 
 系统启动脚本可能重新选择压缩算法；运行 `cat /sys/block/zram0/comp_algorithm` 可检查可用算法及方括号标记的当前算法。启用此选项时，CI 会先运行编解码及后端错误处理测试，再编译内核并检查最终 Image 的 LZ4KD 配置。
 
