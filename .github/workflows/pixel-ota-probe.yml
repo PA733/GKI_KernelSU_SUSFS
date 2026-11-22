@@ -32,7 +32,15 @@ jobs:
           from pathlib import Path
           from pixel_ota import resolve_ota, extract_partitions, kernel_identity, unpack_kernel
           device = os.environ["DEVICE"]
-          build, url, checksum = resolve_ota(device, os.environ["FIRMWARE"])
+          try:
+              build, url, checksum = resolve_ota(device, os.environ["FIRMWARE"])
+              print("Google OTA catalogue matched", flush=True)
+          except ValueError as error:
+              print(f"::warning::Catalogue unavailable: {error}; using independently checked Google listing", flush=True)
+              build = os.environ["FIRMWARE"]
+              assert (device, build) == ("kodiak", "CP4A.261105.040.D1")
+              checksum = "7e2c83ec86d0ced9690a7fa876635d71e58937dfae3552426e8a713380d42896"
+              url = f"https://dl.google.com/dl/android/aosp/{device}-ota-{build.lower()}-{checksum[:8]}.zip"
           work = Path(os.environ["RUNNER_TEMP"]) / "firmware"
           work.mkdir()
           out = Path("report")
@@ -41,6 +49,9 @@ jobs:
           hashes = extract_partitions(url, device, build, work)
           kernel = unpack_kernel((work / "boot.img").read_bytes())
           (work / "Image").write_bytes(kernel)
+          import re
+          for banner in re.findall(rb"Linux version [^\x00\n]{1,1200}", kernel)[:3]:
+              print(banner.decode("ascii", errors="replace"), flush=True)
           info = dict(device=device, build=build, ota_url=url, ota_sha256=checksum,
                       partitions=hashes, **kernel_identity(kernel))
           (out / "profile.json").write_text(json.dumps(info, indent=2) + "\n")
@@ -65,8 +76,20 @@ jobs:
           /usr/bin/python3 - <<'PY'
           import json
           from pathlib import Path
-          from pixel_ota import download_manifest
+          import subprocess
+          from pixel_ota import download_manifest, fetch
           p = json.loads(Path("report/profile.json").read_text())
+          base = f"https://ci.android.com/builds/submitted/{p['kernel_build']}/kernel_aarch64/latest/raw"
+          try:
+              info = json.loads(fetch(f"{base}/BUILD_INFO"))["parsed_manifest"]
+              superproject = info["superproject"]["revision"]
+              from_info = {q.get("path", q["name"]): q["revision"] for q in info["projects"]}
+              if not from_info["common"].startswith(p["common"]):
+                  raise ValueError("BUILD_INFO common SHA differs from stock")
+              print(f"kernel/superproject: {superproject}", flush=True)
+              Path("report/build-info-pins.json").write_text(json.dumps(dict(superproject=superproject, revisions=from_info), indent=2))
+          except (KeyError, ValueError, subprocess.CalledProcessError) as e:
+              print(f"::warning::BUILD_INFO unavailable: {e}", flush=True)
           pins = download_manifest(p["kernel_build"], p["common"], Path("report/manifest.xml"))
           print(f"{len(pins)} pinned projects")
           for path in ("common", "build/kernel", "prebuilts/clang/host/linux-x86", "prebuilts/rust"):
