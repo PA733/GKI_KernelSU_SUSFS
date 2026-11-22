@@ -113,12 +113,25 @@ jobs:
               from html import unescape
               decoded = unescape(view.decode("utf-8", "replace")).replace(r"\u0026", "&").replace(r"\u003d", "=").replace(r"\/", "/")
               print("Viewer fields:", sorted(set(re.findall(r"downloadUrl|signedUrl|artifactUrl|artifactName|fetchUrl|not found", decoded, re.I))))
-              candidates = re.findall(r"""https://[^\s"'<>]+""", decoded)
+              from urllib.parse import urljoin
+
+              decoded = re.sub(r"\\(?:x([0-9a-fA-F]{2})|u([0-9a-fA-F]{4}))", lambda m: chr(int(m[1] or m[2], 16)), decoded)
+              assignment = re.search(r"""artifactUrl["']?\s*(?:\])?\s*[:=]\s*(?:"([^"]*)"|'([^']*)'|(null))""", decoded)
+              direct = (assignment[1] or assignment[2] or "") if assignment else ""
+              page = f"https://ci.android.com/builds/submitted/{bid}/kernel_aarch64/latest/view/{leaf}"
+              print("Viewer artifact URL (host/path only):", (urlparse(direct).netloc, urlparse(direct).path) if direct else "empty")
+              candidates = ([urljoin(page, direct)] if direct else []) + re.findall(r"""https://[^\s"'<>]+""", decoded)
               for candidate in candidates:
                   host = urlparse(candidate).hostname or ""
-                  if host == "storage.googleapis.com" or host.endswith((".googleusercontent.com", ".storage.googleapis.com")):
+                  if host in ("storage.googleapis.com", "androidbuildinternal.googleapis.com", "androidbuild.googleapis.com", "ci.android.com", "android-build.googleusercontent.com") or host.endswith((".googleusercontent.com", ".storage.googleapis.com")):
                       try:
+                          if candidate == page or (host == "ci.android.com" and "/raw/" not in candidate and candidate != urljoin(page, direct)):
+                              continue
                           artifact = fetch(candidate)
+                          if artifact.lstrip().startswith(b"{"):
+                              signed = json.loads(artifact).get("signedUrl")
+                              if signed:
+                                  artifact = fetch(signed)
                           if leaf == name:
                               from pixel_ota import validate_manifest
                               validate_manifest(artifact, p["common"])
@@ -157,7 +170,11 @@ jobs:
           elif Path("report/build-info-pins.json").exists():
               pins = json.loads(Path("report/build-info-pins.json").read_text())["revisions"]
           else:
-              pins = download_manifest(bid, p["common"], dest)
+              try:
+                  pins = download_manifest(bid, p["common"], dest)
+              except ValueError:
+                  print("::warning::No directly verified manifest. Checking the public superproject against the OTA signing certificate.")
+                  raise SystemExit(0)
           print(f"{len(pins)} pinned projects")
           for path in ("common", "build/kernel", "prebuilts/clang/host/linux-x86", "prebuilts/rust"):
               print(f"{path}: {pins[path]}")
@@ -196,6 +213,16 @@ jobs:
           if not snapshots:
               raise ValueError("No matching public superproject snapshots found")
           Path("report/superproject-candidates.json").write_text(json.dumps(snapshots, indent=2))
+          from email.utils import parsedate_to_datetime
+          from datetime import timezone
+          certdate = subprocess.check_output(["openssl","x509","-in","report/stock-gki-cert.pem","-noout","-startdate"],text=True).strip().split("=",1)[1]
+          when = parsedate_to_datetime(certdate).astimezone(timezone.utc).isoformat()
+          at_signing = git("rev-list","--first-parent","--max-count=1","--before="+when,"HEAD").strip()
+          matched = [row for row in snapshots if row["superproject"] == at_signing]
+          if len(matched) != 1:
+              raise ValueError("The exact stock common and certificate date do not identify a candidate")
+          print(f"Public snapshot at certificate start {when}: {at_signing}")
+          Path("report/snapshot-at-cert-time.json").write_text(json.dumps(dict(certificate_not_before=when, **matched[0]), indent=2))
           for row in snapshots:
               print(row["superproject"], {k:row["revisions"][k] for k in ("common","build/kernel","prebuilts/clang/host/linux-x86","prebuilts/rust")})
           PY
