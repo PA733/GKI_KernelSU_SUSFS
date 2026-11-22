@@ -2157,6 +2157,33 @@ jobs:
           if-no-files-found: error
           compression-level: 0
 
+      - name: 打包 Pixel ZRAM 配套镜像
+        if: inputs.pixel_a9_compat && !inputs.clean_build && inputs.use_zram
+        shell: bash
+        run: |
+          stock="$RUNNER_TEMP/pixel-stock"
+          vendor_hash="$(jq -er '.partitions.vendor_kernel_boot' "$stock/profile.json")"
+          printf '%s  %s\n' "$vendor_hash" "$stock/vendor_kernel_boot.img" | sha256sum --check
+          bundle="$GITHUB_WORKSPACE/pixel-zram-bundle"
+          cmp "$bundle/Image" "$ANYKERNEL3/Image"
+          python3 scripts/prepare_pixel_zram.py --bundle "$bundle" \
+            --vendor-kernel-boot "$stock/vendor_kernel_boot.img" --output "$RUNNER_TEMP/pixel-zram-images"
+
+          mkdir pixel-zram-boot
+          cp "${CONFIG}-${BUILD_VARIANT}-boot.img.gz" pixel-zram-boot/boot.img.gz
+          gzip -n -9 -c "$RUNNER_TEMP/pixel-zram-images/vendor_kernel_boot-lz4kd.img" > pixel-zram-boot/vendor_kernel_boot.img.gz
+          gzip -t pixel-zram-boot/vendor_kernel_boot.img.gz
+          cp "$bundle/pixel-lz4kd-config.zip" pixel-zram-boot/
+
+      - name: 上传 Pixel ZRAM 配套镜像
+        if: inputs.pixel_a9_compat && !inputs.clean_build && inputs.use_zram
+        uses: actions/upload-artifact@v6
+        with:
+          name: ${{ env.BUILD_VARIANT }}_kernel-${{ env.CONFIG }}-pixel-zram-boot
+          path: pixel-zram-boot/
+          if-no-files-found: error
+          compression-level: 0
+
       # ==================== 上传补丁冲突文件 ====================
       - name: 上传补丁冲突文件
         if: always() && env.REJ_COUNT > 0

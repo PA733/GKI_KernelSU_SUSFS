@@ -101,7 +101,7 @@ def resolve_ota(device, requested, *, acknowledged=False):
     raise ValueError(f"No official full OTA table available for {device}")
 
 
-def extract_partitions(url, device, build, work):
+def extract_partitions(url, device, build, work, *, include_vendor_kernel_boot=False):
     work.mkdir(parents=True, exist_ok=True)
     def dumper_json(command, filename, *args):
         # v0.1.6 prints a timing line even in metadata --json mode.
@@ -113,6 +113,8 @@ def extract_partitions(url, device, build, work):
             not any(f"/{build}/" in item for item in metadata.get("post-build", "").split("|"))):
         raise ValueError("OTA metadata disagrees with the selected device/build")
     names = "boot,system_dlkm"
+    if include_vendor_kernel_boot:
+        names += ",vendor_kernel_boot"
     partitions = dumper_json("list", "partitions_info.json", "-p", names)
     subprocess.run(["payload-dumper", "extract", url, "-p", names, "-o", str(work)], check=True)
     hashes = {}
@@ -284,12 +286,15 @@ def main():
     parser.add_argument("--work", required=True, type=Path)
     parser.add_argument("--output", required=True, type=Path)
     parser.add_argument("--github-output", type=Path)
+    parser.add_argument("--include-vendor-kernel-boot", action="store_true",
+                        help="Extract and verify the stock vendor_kernel_boot for Pixel ZRAM packaging")
     args = parser.parse_args()
     work, output = args.work, args.output
     output.mkdir(parents=True, exist_ok=True)
     build, url, ota_hash = resolve_ota(args.device, args.build.strip(), acknowledged=True)
     print(f"{args.device} {build} {url}", flush=True)
-    hashes = extract_partitions(url, args.device, build, work)
+    hashes = extract_partitions(url, args.device, build, work,
+                                include_vendor_kernel_boot=args.include_vendor_kernel_boot)
     kernel = unpack_kernel((work / "boot.img").read_bytes())
     identity = kernel_identity(kernel)
     (work / "Image").write_bytes(kernel)
