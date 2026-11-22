@@ -22,6 +22,7 @@ Thumbs.db
 desktop.ini
 
 # Build outputs
+/local-artifacts/
 *.o
 *.ko
 *.mod.c

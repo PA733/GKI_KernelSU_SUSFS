@@ -1,19 +1,20 @@
 diff --git a/lib/Kconfig b/lib/Kconfig
 --- a/lib/Kconfig
 +++ b/lib/Kconfig
-@@ -331,6 +331,12 @@
+@@ -333,6 +333,13 @@
+ config LZ4_COMPRESS
  	tristate
  
- config LZ4_COMPRESS
-+	tristate
-+
++# Shared private helpers require these codec objects to stay built-in.
 +config LZ4KD_COMPRESS
-+	tristate
++	bool
 +
 +config LZ4KD_DECOMPRESS
++	bool
++
+ config LZ4HC_COMPRESS
  	tristate
  
- config LZ4HC_COMPRESS
 diff --git a/lib/Makefile b/lib/Makefile
 --- a/lib/Makefile
 +++ b/lib/Makefile
