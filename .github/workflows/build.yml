@@ -2117,6 +2117,46 @@ jobs:
 #            *.img
           compression-level: 0
 
+      - name: 重打包 Pixel boot.img
+        if: inputs.pixel_a9_compat
+        shell: bash
+        run: |
+          set -u
+          stock="$RUNNER_TEMP/pixel-stock"
+          stock_hash="$(jq -er '.partitions.boot' "$stock/profile.json")"
+          printf '%s  %s\n' "$stock_hash" "$stock/boot.img" | sha256sum --check
+
+          work="$(mktemp -d "$RUNNER_TEMP/pixel-boot.XXXXXX")"
+          trap 'rm -rf "$work"' EXIT
+          cd "$work"
+          # The official APK includes a static x86_64 magiskboot for the Linux runner.
+          curl --fail --silent --show-error --location --retry 3 --max-time 120 \
+            --output Magisk.apk https://github.com/topjohnwu/Magisk/releases/download/v31.0/Magisk-v31.0.apk
+          printf '%s  %s\n' 2c8a488b9a5293e578e95ae4f07e3c57aba4feec4a52ca4dd852a2692d6dd4e8 Magisk.apk | sha256sum --check
+          unzip -p Magisk.apk lib/x86_64/libmagiskboot.so > magiskboot
+          chmod +x magiskboot
+
+          # Preserve the stock components in their original encoding. Repack
+          # compresses the replacement kernel using the stock kernel's format.
+          ./magiskboot unpack -n "$stock/boot.img"
+          cp "$ANYKERNEL3/Image" kernel
+          ./magiskboot repack "$stock/boot.img" boot.img
+
+          mkdir verify
+          (cd verify && ../magiskboot unpack ../boot.img && cmp kernel "$ANYKERNEL3/Image")
+          output="$GITHUB_WORKSPACE/${CONFIG}-${BUILD_VARIANT}-boot.img.gz"
+          gzip -n -9 -c boot.img > "$output"
+          gzip -t "$output"
+
+      - name: 上传 Pixel boot.img.gz
+        if: inputs.pixel_a9_compat
+        uses: actions/upload-artifact@v6
+        with:
+          name: ${{ env.BUILD_VARIANT }}_kernel-${{ env.CONFIG }}-boot
+          path: ${{ env.CONFIG }}-${{ env.BUILD_VARIANT }}-boot.img.gz
+          if-no-files-found: error
+          compression-level: 0
+
       # ==================== 上传补丁冲突文件 ====================
       - name: 上传补丁冲突文件
         if: always() && env.REJ_COUNT > 0
