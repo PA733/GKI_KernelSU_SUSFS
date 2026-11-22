@@ -46,6 +46,8 @@
 
 工作流从所选 OTA 提取 `boot` 和 `system_dlkm`，解析原厂内核标识并验证模块签名。源码优先使用 Android CI 的构建清单。清单缺失时根据原厂模块证书的起始时间推定公开 superproject 快照，并要求其 common 提交与原厂内核一致。运行产物 `pixel-stock-<设备代号>-<Build ID>` 包含清单、解析依据、证书和模块 CRC。内核包上传前会核对编译结果的 release 和模块 CRC。
 
+构建完成后，`magiskboot` 会把编译好的内核装入同一 OTA 的原厂 `boot.img`。在 Actions 的 Artifacts 下载后缀为 `-boot` 的产物，解压 `*-boot.img.gz` 即可得到完整的重打包镜像。替换内核会使原厂签名失效，使用此镜像需要解锁 bootloader。
+
 ## ⚠️ 重要更新日志
 
 > **注意：** 目前不支持一加 ColorOS 14、15，刷入后可能需要清除数据开机。

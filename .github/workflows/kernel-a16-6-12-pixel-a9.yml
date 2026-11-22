@@ -91,6 +91,7 @@ jobs:
         run: |
           /usr/bin/python3 scripts/pixel_ota.py "${MODEL##* }" --build "$FIRMWARE_BUILD" \
             --work "$RUNNER_TEMP/firmware" --output stock-profile --github-output "$GITHUB_OUTPUT"
+          mv "$RUNNER_TEMP/firmware/boot.img" stock-profile/boot.img
           jq -r '"Device: \(.device) · Firmware: \(.build) · Kernel: \(.release) · Sources: \(.source)"' \
             stock-profile/profile.json >> "$GITHUB_STEP_SUMMARY"
       - uses: actions/upload-artifact@v6
