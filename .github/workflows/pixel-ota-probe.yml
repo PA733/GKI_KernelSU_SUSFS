@@ -1,0 +1,243 @@
+name: Verify November Pixel 11 Pro XL firmware inputs
+on:
+  push:
+    branches: [test/kodiak-nov-ota-profile]
+  workflow_dispatch:
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      DEVICE: kodiak
+      FIRMWARE: CP4A.261105.040.D1
+      PYTHONPATH: scripts
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+      - name: Install extraction tools
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y erofs-utils e2fsprogs lz4 zstd python3-pyelftools
+          go install github.com/xishang0128/payload-dumper-go/cmd/payload-dumper@v0.1.6
+          echo "$(go env GOPATH)/bin" >> "$GITHUB_PATH"
+      - name: Read selected OTA partitions and stock kernel
+        id: ota
+        run: |
+          /usr/bin/python3 - <<'PY'
+          import json, os
+          from pathlib import Path
+          from pixel_ota import resolve_ota, extract_partitions, kernel_identity, unpack_kernel
+          device = os.environ["DEVICE"]
+          build, url, checksum = resolve_ota(device, "", acknowledged=True)
+          if build != os.environ["FIRMWARE"]:
+              raise ValueError(f"Expected November global build; catalogue selected {build}")
+          print(f"Google OTA catalogue selected latest global {device} build {build}", flush=True)
+          work = Path(os.environ["RUNNER_TEMP"]) / "firmware"
+          work.mkdir()
+          out = Path("report")
+          out.mkdir()
+          print(f"{device} {build}: {url}", flush=True)
+          hashes = extract_partitions(url, device, build, work)
+          kernel = unpack_kernel((work / "boot.img").read_bytes())
+          (work / "Image").write_bytes(kernel)
+          import re
+          for banner in re.findall(rb"Linux version [^\x00\n]{1,1200}", kernel)[:3]:
+              print(banner.decode("ascii", errors="replace"), flush=True)
+          info = dict(device=device, build=build, ota_url=url, ota_sha256=checksum,
+                      partitions=hashes, **kernel_identity(kernel))
+          (out / "profile.json").write_text(json.dumps(info, indent=2) + "\n")
+          print(json.dumps(info, indent=2))
+          PY
+      - name: Check stock module signatures and symbol versions
+        run: |
+          set -euo pipefail
+          work="$RUNNER_TEMP/firmware"
+          mkdir -p "$work/modules"
+          case "$(blkid -p -s TYPE -o value "$work/system_dlkm.img")" in
+            erofs) fsck.erofs --extract="$work/modules" "$work/system_dlkm.img" ;;
+            ext4) debugfs -R "rdump / $work/modules" "$work/system_dlkm.img" ;;
+            *) echo "::error::Unsupported stock system_dlkm filesystem"; exit 1 ;;
+          esac
+          /usr/bin/python3 scripts/pixel_modules.py "$work/modules" "$work/Image" report
+          openssl x509 -in report/stock-gki-cert.pem -noout -fingerprint -sha256
+          cut -f1 report/stock-module-crcs-critical.tsv | sort | uniq -c
+      - name: Resolve exact source and compiler revisions
+        if: ${{ !cancelled() && steps.ota.outcome == 'success' }}
+        run: |
+          /usr/bin/python3 - <<'PY'
+          import json
+          from pathlib import Path
+          import subprocess
+          from pixel_ota import download_manifest, fetch
+          p = json.loads(Path("report/profile.json").read_text())
+          base = f"https://ci.android.com/builds/submitted/{p['kernel_build']}/kernel_aarch64/latest/raw"
+          try:
+              info = json.loads(fetch(f"{base}/BUILD_INFO"))["parsed_manifest"]
+              superproject = info["superproject"]["revision"]
+              from_info = {q.get("path", q["name"]): q["revision"] for q in info["projects"]}
+              if not from_info["common"].startswith(p["common"]):
+                  raise ValueError("BUILD_INFO common SHA differs from stock")
+              print(f"kernel/superproject: {superproject}", flush=True)
+              Path("report/build-info-pins.json").write_text(json.dumps(dict(superproject=superproject, revisions=from_info), indent=2))
+          except (KeyError, ValueError, subprocess.CalledProcessError) as e:
+              print(f"::warning::BUILD_INFO unavailable: {e}", flush=True)
+          bid = p["kernel_build"]
+          from urllib.request import urlopen
+          from urllib.error import HTTPError, URLError
+          from urllib.parse import urlparse
+          import re
+          def read_url(url, cap=2_000_000):
+              try:
+                  with urlopen(url, timeout=30) as response:
+                      body = response.read(cap)
+                      print(f"{response.status} {urlparse(url).path} ({response.headers.get_content_type()}, {len(body)} bytes)", flush=True)
+                      return body
+              except HTTPError as error:
+                  print(f"{error.code} {urlparse(url).path}: {error.read(220)!r}", flush=True)
+              except (OSError, URLError) as error:
+                  print(type(error).__name__, urlparse(url).path)
+              return b""
+          name = f"manifest_{bid}.xml"
+          # The official artifact viewer and the public Build API use different download routes.
+          for leaf in ("BUILD_INFO", name):
+              view = read_url(f"https://ci.android.com/builds/submitted/{bid}/kernel_aarch64/latest/view/{leaf}")
+              from html import unescape
+              decoded = unescape(view.decode("utf-8", "replace")).replace(r"\u0026", "&").replace(r"\u003d", "=").replace(r"\/", "/")
+              print("Viewer fields:", sorted(set(re.findall(r"downloadUrl|signedUrl|artifactUrl|artifactName|fetchUrl|not found", decoded, re.I))))
+              from urllib.parse import urljoin
+
+              decoded = re.sub(r"\\(?:x([0-9a-fA-F]{2})|u([0-9a-fA-F]{4}))", lambda m: chr(int(m[1] or m[2], 16)), decoded)
+              assignment = re.search(r"""artifactUrl["']?\s*(?:\])?\s*[:=]\s*(?:"([^"]*)"|'([^']*)'|(null))""", decoded)
+              direct = (assignment[1] or assignment[2] or "") if assignment else ""
+              page = f"https://ci.android.com/builds/submitted/{bid}/kernel_aarch64/latest/view/{leaf}"
+              print("Viewer artifact URL (host/path only):", (urlparse(direct).netloc, urlparse(direct).path) if direct else "empty")
+              candidates = ([urljoin(page, direct)] if direct else []) + re.findall(r"""https://[^\s"'<>]+""", decoded)
+              for candidate in candidates:
+                  host = urlparse(candidate).hostname or ""
+                  if host in ("storage.googleapis.com", "androidbuildinternal.googleapis.com", "androidbuild.googleapis.com", "ci.android.com", "android-build.googleusercontent.com") or host.endswith((".googleusercontent.com", ".storage.googleapis.com")):
+                      try:
+                          if candidate == page or (host == "ci.android.com" and "/raw/" not in candidate and candidate != urljoin(page, direct)):
+                              continue
+                          artifact = fetch(candidate)
+                          if artifact.lstrip().startswith(b"{"):
+                              signed = json.loads(artifact).get("signedUrl")
+                              if signed:
+                                  artifact = fetch(signed)
+                          if leaf == name:
+                              from pixel_ota import validate_manifest
+                              validate_manifest(artifact, p["common"])
+                              Path("report", name).write_bytes(artifact)
+                          else:
+                              parsed = json.loads(artifact)["parsed_manifest"]
+                              revs = {q.get("path", q["name"]): q["revision"] for q in parsed["projects"]}
+                              assert revs["common"].startswith(p["common"])
+                              Path("report/build-info-pins.json").write_text(json.dumps(dict(superproject=parsed["superproject"]["revision"], revisions=revs), indent=2))
+                          print(f"Verified {leaf} from the public artifact viewer")
+                          break
+                      except (KeyError, ValueError, subprocess.CalledProcessError):
+                          continue
+              api = f"https://www.googleapis.com/android/internal/build/v3/builds/{bid}/kernel_aarch64/attempts/latest/artifacts/{leaf}/url"
+              response = read_url(api)
+              if response:
+                  result = json.loads(response)
+                  if result.get("signedUrl"):
+                      data = fetch(result["signedUrl"])
+                      Path("report", leaf).write_bytes(data) if leaf != "BUILD_INFO" else None
+                      if leaf == "BUILD_INFO":
+                          parsed = json.loads(data)["parsed_manifest"]
+                          from_info = {q.get("path", q["name"]): q["revision"] for q in parsed["projects"]}
+                          assert from_info["common"].startswith(p["common"])
+                          Path("report/build-info-pins.json").write_text(json.dumps(dict(superproject=parsed["superproject"]["revision"], revisions=from_info),indent=2))
+          # Positive controls using a known public AOSP GKI release.
+          read_url("https://ci.android.com/builds/submitted/16980263/kernel_aarch64/latest/raw/manifest_16980263.xml", 256)
+          read_url("https://android.googlesource.com/kernel/common/+/" + p["common"] + "?format=JSON", 800)
+          # Try the public Build API hosts as well as ci.android.com's raw endpoint.
+          for domain in ("androidbuildinternal.googleapis.com", "androidbuild.googleapis.com"):
+              api = f"https://{domain}/android/internal/build/v3/builds/{bid}/kernel_aarch64/attempts/latest/artifacts/{name}/url"
+              body = read_url(api)
+              if body and body.lstrip().startswith(b"{"):
+                  signed = json.loads(body).get("signedUrl")
+                  if signed:
+                      Path("report", name).write_bytes(fetch(signed))
+                      break
+          # A public 16 KiB sibling, when published, uses the same GKI build ID.
+          if not Path("report", name).exists():
+              other = read_url(f"https://ci.android.com/builds/submitted/{bid}/kernel_aarch64_16k/latest/raw/{name}")
+              if other.lstrip().startswith(b"<?xml"):
+                  Path("report", name).write_bytes(other)
+          from pixel_ota import validate_manifest
+          dest = Path("report/manifest.xml")
+          alternate = Path("report", name)
+          if alternate.exists():
+              dest.write_bytes(alternate.read_bytes())
+          if dest.exists():
+              pins = validate_manifest(dest.read_bytes(), p["common"])
+          elif Path("report/build-info-pins.json").exists():
+              pins = json.loads(Path("report/build-info-pins.json").read_text())["revisions"]
+          else:
+              try:
+                  pins = download_manifest(bid, p["common"], dest)
+              except ValueError:
+                  print("::warning::No directly verified manifest. Checking the public superproject against the OTA signing certificate.")
+                  raise SystemExit(0)
+          print(f"{len(pins)} pinned projects")
+          for path in ("common", "build/kernel", "prebuilts/clang/host/linux-x86", "prebuilts/rust"):
+              print(f"{path}: {pins[path]}")
+          PY
+      - name: Locate published superproject snapshots with the stock common revision
+        if: ${{ !cancelled() && steps.ota.outcome == 'success' }}
+        run: |
+          set -euo pipefail
+          repo="$RUNNER_TEMP/superproject.git"
+          git clone -q --bare --single-branch -b common-android16-6.12-sp https://android.googlesource.com/kernel/superproject "$repo"
+          /usr/bin/python3 - "$repo" <<'PY'
+          import json, subprocess, sys
+          from pathlib import Path
+          repo = sys.argv[1]
+          prefix = json.loads(Path("report/profile.json").read_text())["common"]
+          def git(*args):
+              return subprocess.check_output(["git", "-C", repo, *args], text=True)
+          # The common gitlink changes less often than the build tools.
+          # Report every first-parent snapshot in an interval where the common revision matches.
+          commits = git("log", "--first-parent", "--raw", "--no-abbrev", "--format=commit %H", "HEAD", "--", "common")
+          after = None
+          snapshots = []
+          for line in commits.splitlines():
+              if line.startswith("commit "):
+                  rev = line.split()[1]
+              if line.startswith(":"):
+                  new = line.split()[3]
+                  if new.startswith(prefix):
+                      interval = git("rev-list", "--first-parent", (after + "^" if after else "HEAD"), "^" + rev + "^").splitlines()
+                      for candidate in interval:
+                          tree = git("ls-tree", "-r", candidate)
+                          pins = {row.split("\t")[1]: row.split()[2] for row in tree.splitlines() if row.startswith("160000 ")}
+                          if pins["common"] == new:
+                              snapshots.append({"superproject": candidate, "revisions": pins})
+                  after = rev
+          if not snapshots:
+              raise ValueError("No matching public superproject snapshots found")
+          Path("report/superproject-candidates.json").write_text(json.dumps(snapshots, indent=2))
+          from email.utils import parsedate_to_datetime
+          from datetime import timezone
+          certdate = subprocess.check_output(["openssl","x509","-in","report/stock-gki-cert.pem","-noout","-startdate"],text=True).strip().split("=",1)[1]
+          when = parsedate_to_datetime(certdate).astimezone(timezone.utc).isoformat()
+          at_signing = git("rev-list","--first-parent","--max-count=1","--before="+when,"HEAD").strip()
+          matched = [row for row in snapshots if row["superproject"] == at_signing]
+          if len(matched) != 1:
+              raise ValueError("The exact stock common and certificate date do not identify a candidate")
+          print(f"Public snapshot at certificate start {when}: {at_signing}")
+          Path("report/snapshot-at-cert-time.json").write_text(json.dumps(dict(certificate_not_before=when, **matched[0]), indent=2))
+          for row in snapshots:
+              print(row["superproject"], {k:row["revisions"][k] for k in ("common","build/kernel","prebuilts/clang/host/linux-x86","prebuilts/rust")})
+          PY
+      - uses: actions/upload-artifact@v6
+        if: ${{ !cancelled() && steps.ota.outcome == 'success' }}
+        with:
+          name: kodiak-november-ota-profile
+          path: report/
+          if-no-files-found: error
