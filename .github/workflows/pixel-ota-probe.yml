@@ -90,10 +90,114 @@ jobs:
               Path("report/build-info-pins.json").write_text(json.dumps(dict(superproject=superproject, revisions=from_info), indent=2))
           except (KeyError, ValueError, subprocess.CalledProcessError) as e:
               print(f"::warning::BUILD_INFO unavailable: {e}", flush=True)
-          pins = download_manifest(p["kernel_build"], p["common"], Path("report/manifest.xml"))
+          bid = p["kernel_build"]
+          from urllib.request import urlopen
+          from urllib.error import HTTPError, URLError
+          from urllib.parse import urlparse
+          import re
+          def read_url(url, cap=2_000_000):
+              try:
+                  with urlopen(url, timeout=30) as response:
+                      body = response.read(cap)
+                      print(f"{response.status} {urlparse(url).path} ({response.headers.get_content_type()}, {len(body)} bytes)", flush=True)
+                      return body
+              except HTTPError as error:
+                  print(f"{error.code} {urlparse(url).path}: {error.read(220)!r}", flush=True)
+              except (OSError, URLError) as error:
+                  print(type(error).__name__, urlparse(url).path)
+              return b""
+          name = f"manifest_{bid}.xml"
+          # The official artifact viewer and the public Build API use different download routes.
+          for leaf in ("BUILD_INFO", name):
+              view = read_url(f"https://ci.android.com/builds/submitted/{bid}/kernel_aarch64/latest/view/{leaf}")
+              from html import unescape
+              decoded = unescape(view.decode("utf-8", "replace")).replace(r"\u0026", "&").replace(r"\u003d", "=").replace(r"\/", "/")
+              print("Viewer fields:", sorted(set(re.findall(r"downloadUrl|signedUrl|artifactUrl|artifactName|fetchUrl|not found", decoded, re.I))))
+              candidates = re.findall(r"""https://[^\s"'<>]+""", decoded)
+              for candidate in candidates:
+                  host = urlparse(candidate).hostname or ""
+                  if host == "storage.googleapis.com" or host.endswith((".googleusercontent.com", ".storage.googleapis.com")):
+                      try:
+                          artifact = fetch(candidate)
+                          if leaf == name:
+                              from pixel_ota import validate_manifest
+                              validate_manifest(artifact, p["common"])
+                              Path("report", name).write_bytes(artifact)
+                          else:
+                              parsed = json.loads(artifact)["parsed_manifest"]
+                              revs = {q.get("path", q["name"]): q["revision"] for q in parsed["projects"]}
+                              assert revs["common"].startswith(p["common"])
+                              Path("report/build-info-pins.json").write_text(json.dumps(dict(superproject=parsed["superproject"]["revision"], revisions=revs), indent=2))
+                          print(f"Verified {leaf} from the public artifact viewer")
+                          break
+                      except (KeyError, ValueError, subprocess.CalledProcessError):
+                          continue
+              api = f"https://www.googleapis.com/android/internal/build/v3/builds/{bid}/kernel_aarch64/attempts/latest/artifacts/{leaf}/url"
+              response = read_url(api)
+              if response:
+                  result = json.loads(response)
+                  if result.get("signedUrl"):
+                      data = fetch(result["signedUrl"])
+                      Path("report", leaf).write_bytes(data) if leaf != "BUILD_INFO" else None
+                      if leaf == "BUILD_INFO":
+                          parsed = json.loads(data)["parsed_manifest"]
+                          from_info = {q.get("path", q["name"]): q["revision"] for q in parsed["projects"]}
+                          assert from_info["common"].startswith(p["common"])
+                          Path("report/build-info-pins.json").write_text(json.dumps(dict(superproject=parsed["superproject"]["revision"], revisions=from_info),indent=2))
+          # Positive controls using a known public AOSP GKI release.
+          read_url("https://ci.android.com/builds/submitted/16980263/kernel_aarch64/latest/raw/manifest_16980263.xml", 256)
+          read_url("https://android.googlesource.com/kernel/common/+/" + p["common"] + "?format=JSON", 800)
+          from pixel_ota import validate_manifest
+          dest = Path("report/manifest.xml")
+          alternate = Path("report", name)
+          if alternate.exists():
+              dest.write_bytes(alternate.read_bytes())
+          if dest.exists():
+              pins = validate_manifest(dest.read_bytes(), p["common"])
+          elif Path("report/build-info-pins.json").exists():
+              pins = json.loads(Path("report/build-info-pins.json").read_text())["revisions"]
+          else:
+              pins = download_manifest(bid, p["common"], dest)
           print(f"{len(pins)} pinned projects")
           for path in ("common", "build/kernel", "prebuilts/clang/host/linux-x86", "prebuilts/rust"):
               print(f"{path}: {pins[path]}")
+          PY
+      - name: Locate published superproject snapshots with the stock common revision
+        if: ${{ !cancelled() && steps.ota.outcome == 'success' }}
+        run: |
+          set -euo pipefail
+          repo="$RUNNER_TEMP/superproject.git"
+          git clone -q --bare --single-branch -b common-android16-6.12-sp https://android.googlesource.com/kernel/superproject "$repo"
+          /usr/bin/python3 - "$repo" <<'PY'
+          import json, subprocess, sys
+          from pathlib import Path
+          repo = sys.argv[1]
+          prefix = json.loads(Path("report/profile.json").read_text())["common"]
+          def git(*args):
+              return subprocess.check_output(["git", "-C", repo, *args], text=True)
+          # The common gitlink changes less often than the build tools.
+          # Report every first-parent snapshot in an interval where the common revision matches.
+          commits = git("log", "--first-parent", "--raw", "--no-abbrev", "--format=commit %H", "HEAD", "--", "common")
+          after = None
+          snapshots = []
+          for line in commits.splitlines():
+              if line.startswith("commit "):
+                  rev = line.split()[1]
+              if line.startswith(":"):
+                  new = line.split()[3]
+                  if new.startswith(prefix):
+                      interval = git("rev-list", "--first-parent", (after + "^" if after else "HEAD"), "^" + rev + "^").splitlines()
+                      for candidate in interval:
+                          tree = git("ls-tree", "-r", candidate)
+                          pins = {row.split("\t")[1]: row.split()[2] for row in tree.splitlines() if row.startswith("160000 ")}
+                          if pins["common"] == new:
+                              snapshots.append({"superproject": candidate, "revisions": pins})
+                  after = rev
+          if not snapshots:
+              raise ValueError("No matching public superproject snapshots found")
+          Path("report/superproject-candidates.json").write_text(json.dumps(snapshots, indent=2))
+          for row in snapshots:
+              print(row["superproject"], {k:row["revisions"][k] for k in ("common","build/kernel","prebuilts/clang/host/linux-x86","prebuilts/rust")})
           PY
       - uses: actions/upload-artifact@v6
         if: ${{ !cancelled() && steps.ota.outcome == 'success' }}
