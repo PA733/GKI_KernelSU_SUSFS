@@ -40,6 +40,12 @@
 
 ---
 
+## Pixel 11 系列内核构建
+
+在 Actions 打开 **Pixel 11 GKI from stock OTA**，点击 **Run workflow** 并选择设备型号。固件 Build ID 留空会使用该机型最新的全球稳定版。要复现指定月份或地区的固件，填写 Google Full OTA 页面列出的完整 Build ID，例如 Pixel 11 Pro XL 的 `CP4A.261105.040.D1`。默认执行 clean 构建。
+
+工作流从所选 OTA 提取 `boot` 和 `system_dlkm`，解析原厂内核标识并验证模块签名。源码优先使用 Android CI 的构建清单。清单缺失时根据原厂模块证书的起始时间推定公开 superproject 快照，并要求其 common 提交与原厂内核一致。运行产物 `pixel-stock-<设备代号>-<Build ID>` 包含清单、解析依据、证书和模块 CRC。内核包上传前会核对编译结果的 release 和模块 CRC。
+
 ## ⚠️ 重要更新日志
 
 > **注意：** 目前不支持一加 ColorOS 14、15，刷入后可能需要清除数据开机。
