@@ -32,15 +32,10 @@ jobs:
           from pathlib import Path
           from pixel_ota import resolve_ota, extract_partitions, kernel_identity, unpack_kernel
           device = os.environ["DEVICE"]
-          try:
-              build, url, checksum = resolve_ota(device, os.environ["FIRMWARE"])
-              print("Google OTA catalogue matched", flush=True)
-          except ValueError as error:
-              print(f"::warning::Catalogue unavailable: {error}; using independently checked Google listing", flush=True)
-              build = os.environ["FIRMWARE"]
-              assert (device, build) == ("kodiak", "CP4A.261105.040.D1")
-              checksum = "7e2c83ec86d0ced9690a7fa876635d71e58937dfae3552426e8a713380d42896"
-              url = f"https://dl.google.com/dl/android/aosp/{device}-ota-{build.lower()}-{checksum[:8]}.zip"
+          build, url, checksum = resolve_ota(device, "", acknowledged=True)
+          if build != os.environ["FIRMWARE"]:
+              raise ValueError(f"Expected November global build; catalogue selected {build}")
+          print(f"Google OTA catalogue selected latest global {device} build {build}", flush=True)
           work = Path(os.environ["RUNNER_TEMP"]) / "firmware"
           work.mkdir()
           out = Path("report")
@@ -160,6 +155,20 @@ jobs:
           # Positive controls using a known public AOSP GKI release.
           read_url("https://ci.android.com/builds/submitted/16980263/kernel_aarch64/latest/raw/manifest_16980263.xml", 256)
           read_url("https://android.googlesource.com/kernel/common/+/" + p["common"] + "?format=JSON", 800)
+          # Try the public Build API hosts as well as ci.android.com's raw endpoint.
+          for domain in ("androidbuildinternal.googleapis.com", "androidbuild.googleapis.com"):
+              api = f"https://{domain}/android/internal/build/v3/builds/{bid}/kernel_aarch64/attempts/latest/artifacts/{name}/url"
+              body = read_url(api)
+              if body and body.lstrip().startswith(b"{"):
+                  signed = json.loads(body).get("signedUrl")
+                  if signed:
+                      Path("report", name).write_bytes(fetch(signed))
+                      break
+          # A public 16 KiB sibling, when published, uses the same GKI build ID.
+          if not Path("report", name).exists():
+              other = read_url(f"https://ci.android.com/builds/submitted/{bid}/kernel_aarch64_16k/latest/raw/{name}")
+              if other.lstrip().startswith(b"<?xml"):
+                  Path("report", name).write_bytes(other)
           from pixel_ota import validate_manifest
           dest = Path("report/manifest.xml")
           alternate = Path("report", name)

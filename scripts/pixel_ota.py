@@ -79,15 +79,16 @@ def select_ota(builds, requested):
     return candidates[0]
 
 
-def fetch(url):
+def fetch(url, *options):
     return subprocess.check_output(["curl", "--fail", "--silent", "--show-error", "--location",
-                                    "--retry", "3", "--max-time", "90", "--proto", "=https", url])
+                                    "--retry", "3", "--max-time", "90", "--proto", "=https", *options, url])
 
 
-def resolve_ota(device, requested):
+def resolve_ota(device, requested, *, acknowledged=False):
+    options = ("--cookie", "devsite_wall_acks=nexus-ota-tos") if acknowledged else ()
     for domain in ("developers.google.com", "developers.google.cn"):
         try:
-            html = fetch(f"https://{domain}/android/ota?hl=en").decode()
+            html = fetch(f"https://{domain}/android/ota?hl=en", *options).decode()
         except subprocess.CalledProcessError:
             continue
         builds = releases(html, device)
