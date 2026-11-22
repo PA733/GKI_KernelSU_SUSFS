@@ -1,0 +1,80 @@
+name: Verify November Pixel 11 Pro XL firmware inputs
+on:
+  push:
+    branches: [test/kodiak-nov-ota-profile]
+  workflow_dispatch:
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      DEVICE: kodiak
+      FIRMWARE: CP4A.261105.040.D1
+      PYTHONPATH: scripts
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+      - name: Install extraction tools
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y erofs-utils e2fsprogs lz4 zstd python3-pyelftools
+          go install github.com/xishang0128/payload-dumper-go/cmd/payload-dumper@v0.1.6
+          echo "$(go env GOPATH)/bin" >> "$GITHUB_PATH"
+      - name: Read selected OTA partitions and stock kernel
+        id: ota
+        run: |
+          /usr/bin/python3 - <<'PY'
+          import json, os
+          from pathlib import Path
+          from pixel_ota import resolve_ota, extract_partitions, kernel_identity, unpack_kernel
+          device = os.environ["DEVICE"]
+          build, url, checksum = resolve_ota(device, os.environ["FIRMWARE"])
+          work = Path(os.environ["RUNNER_TEMP"]) / "firmware"
+          work.mkdir()
+          out = Path("report")
+          out.mkdir()
+          print(f"{device} {build}: {url}", flush=True)
+          hashes = extract_partitions(url, device, build, work)
+          kernel = unpack_kernel((work / "boot.img").read_bytes())
+          (work / "Image").write_bytes(kernel)
+          info = dict(device=device, build=build, ota_url=url, ota_sha256=checksum,
+                      partitions=hashes, **kernel_identity(kernel))
+          (out / "profile.json").write_text(json.dumps(info, indent=2) + "\n")
+          print(json.dumps(info, indent=2))
+          PY
+      - name: Check stock module signatures and symbol versions
+        run: |
+          set -euo pipefail
+          work="$RUNNER_TEMP/firmware"
+          mkdir -p "$work/modules"
+          case "$(blkid -p -s TYPE -o value "$work/system_dlkm.img")" in
+            erofs) fsck.erofs --extract="$work/modules" "$work/system_dlkm.img" ;;
+            ext4) debugfs -R "rdump / $work/modules" "$work/system_dlkm.img" ;;
+            *) echo "::error::Unsupported stock system_dlkm filesystem"; exit 1 ;;
+          esac
+          /usr/bin/python3 scripts/pixel_modules.py "$work/modules" "$work/Image" report
+          openssl x509 -in report/stock-gki-cert.pem -noout -fingerprint -sha256
+          cut -f1 report/stock-module-crcs-critical.tsv | sort | uniq -c
+      - name: Resolve exact source and compiler revisions
+        if: ${{ !cancelled() && steps.ota.outcome == 'success' }}
+        run: |
+          /usr/bin/python3 - <<'PY'
+          import json
+          from pathlib import Path
+          from pixel_ota import download_manifest
+          p = json.loads(Path("report/profile.json").read_text())
+          pins = download_manifest(p["kernel_build"], p["common"], Path("report/manifest.xml"))
+          print(f"{len(pins)} pinned projects")
+          for path in ("common", "build/kernel", "prebuilts/clang/host/linux-x86", "prebuilts/rust"):
+              print(f"{path}: {pins[path]}")
+          PY
+      - uses: actions/upload-artifact@v6
+        if: ${{ !cancelled() && steps.ota.outcome == 'success' }}
+        with:
+          name: kodiak-november-ota-profile
+          path: report/
+          if-no-files-found: error
