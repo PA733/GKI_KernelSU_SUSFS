@@ -1,5 +1,6 @@
 """Resolve a Pixel full OTA and derive the GKI build inputs from its stock images."""
 import argparse
+import base64
 import datetime
 import gzip
 import hashlib
@@ -7,7 +8,9 @@ import json
 import re
 import struct
 import subprocess
+import sys
 import xml.etree.ElementTree as ET
+from email.utils import parsedate_to_datetime
 from html.parser import HTMLParser
 from pathlib import Path
 from urllib.parse import urlsplit
@@ -71,12 +74,12 @@ def select_ota(builds, requested):
         return requested.upper()
     if not builds:
         raise ValueError("No matching device in the full OTA table")
-    month = max(row[0] for row in builds.values())
-    candidates = [build for build, row in builds.items() if row[0] == month and not row[1]]
-    if len(candidates) != 1:
-        raise ValueError("Select an exact build ID for this release month: " +
-                         ", ".join(build for build, row in builds.items() if row[0] == month))
-    return candidates[0]
+    # Google lists releases chronologically within each month. A later carrier
+    # rollout must not replace the most recently published global release.
+    global_builds = [build for build, row in builds.items() if not row[1]]
+    if not global_builds:
+        raise ValueError("No global release for this device; specify a regional Build ID")
+    return max(reversed(global_builds), key=lambda build: builds[build][0])
 
 
 def fetch(url, *options):
@@ -183,40 +186,125 @@ def download_manifest(build, common, output):
     return pins
 
 
+def stock_modules(work, output):
+    image = work / "system_dlkm.img"
+    modules = work / "modules"
+    modules.mkdir()
+    kind = subprocess.check_output(["blkid", "-p", "-s", "TYPE", "-o", "value", image],
+                                   text=True).strip()
+    if kind == "erofs":
+        subprocess.run(["fsck.erofs", f"--extract={modules}", image], check=True)
+    elif kind == "ext4":
+        subprocess.run(["debugfs", "-R", f"rdump / {modules}", image], check=True)
+    else:
+        raise ValueError(f"Unsupported stock system_dlkm filesystem: {kind}")
+    subprocess.run([sys.executable, Path(__file__).with_name("pixel_modules.py"),
+                    modules, work / "Image", output], check=True)
+
+
+def snapshot_manifest(template, revisions, common):
+    root = ET.fromstring(template)
+    paths = set()
+    for project in root.findall("project"):
+        path = project.get("path", project.get("name"))
+        project.set("revision", revisions[path])
+        paths.add(path)
+    if paths != set(revisions):
+        raise ValueError("The superproject and its manifest template list different projects")
+    # The moving superproject branch in a template must not override explicit pins.
+    for entry in root.findall("superproject"):
+        root.remove(entry)
+    xml = ET.tostring(root, encoding="utf-8", xml_declaration=True)
+    validate_manifest(xml, common)
+    return xml
+
+
+def resolve_sources(identity, cert, work, output):
+    build, common = identity["kernel_build"], identity["common"]
+    artifact = f"https://ci.android.com/builds/submitted/{build}/kernel_aarch64/latest/raw"
+    try:
+        xml = fetch(f"{artifact}/manifest_{build}.xml")
+    except subprocess.CalledProcessError:
+        xml = b""
+    if xml.lstrip().startswith((b"<?xml", b"<manifest")):
+        pins = validate_manifest(xml, common)
+        (output / "manifest.xml").write_bytes(xml)
+        return dict(source="Android CI manifest", revisions=pins)
+
+    try:
+        raw_info = fetch(f"{artifact}/BUILD_INFO")
+        info = json.loads(raw_info)["parsed_manifest"]
+    except (subprocess.CalledProcessError, json.JSONDecodeError, KeyError):
+        info = None
+    repo = work / "superproject.git"
+    branch = "common-android16-6.12-sp"
+    subprocess.run(["git", "clone", "--bare", "--single-branch", "--branch", branch,
+                    "https://android.googlesource.com/kernel/superproject", repo], check=True)
+
+    def git(*args):
+        return subprocess.check_output(["git", "-C", repo, *args], text=True).strip()
+
+    if info is not None:
+        rev = info["superproject"]["revision"]
+        if not re.fullmatch("[0-9a-f]{40}", rev):
+            raise ValueError("Invalid Android CI superproject revision")
+        source = "Android CI BUILD_INFO"
+    else:
+        start = subprocess.check_output(["openssl", "x509", "-in", cert, "-noout",
+                                        "-startdate"], text=True).strip().split("=", 1)[1]
+        when = parsedate_to_datetime(start).astimezone(datetime.timezone.utc).isoformat()
+        rev = git("rev-list", "--first-parent", "--max-count=1", "--before=" + when, "HEAD")
+        if not rev:
+            raise ValueError(f"No public superproject snapshot at stock signing time {when}")
+        source = f"Public superproject at stock certificate start {when} (inferred)"
+    tree = git("ls-tree", "-r", rev)
+    pins = {line.split("\t")[1]: line.split()[2] for line in tree.splitlines()
+            if line.startswith("160000 ")}
+    if not pins["common"].startswith(common):
+        raise ValueError(f"Snapshot {rev} contains {pins['common']}; stock kernel requires {common}")
+    if info is not None:
+        ci_pins = {p.get("path", p["name"]): p["revision"] for p in info["projects"]}
+        if ci_pins != pins:
+            raise ValueError("Android CI project revisions disagree with its superproject")
+    name, _, template_rev = git("show", rev + ":.supermanifest").split()
+    if name != "kernel/manifest" or not re.fullmatch("[a-f0-9]{40}", template_rev):
+        raise ValueError(f"Invalid manifest template at superproject {rev}")
+    template = base64.b64decode(fetch(f"https://android.googlesource.com/kernel/manifest/+/"
+                                      f"{template_rev}/default.xml?format=TEXT").strip(), validate=True)
+    xml = snapshot_manifest(template, pins, common)
+    (output / "manifest.xml").write_bytes(xml)
+    print(f"{source}: {rev} ({len(pins)} projects)", flush=True)
+    return dict(source=source, superproject=rev, manifest_revision=template_rev, revisions=pins)
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("device", choices=["kodiak", "grizzly", "cubs", "yogi"])
     parser.add_argument("--build", default="")
     parser.add_argument("--work", required=True, type=Path)
     parser.add_argument("--output", required=True, type=Path)
-    parser.add_argument("--diagnostic-tag", default="")
     parser.add_argument("--github-output", type=Path)
     args = parser.parse_args()
     work, output = args.work, args.output
     output.mkdir(parents=True, exist_ok=True)
-    build, url, ota_hash = resolve_ota(args.device, args.build.strip())
+    build, url, ota_hash = resolve_ota(args.device, args.build.strip(), acknowledged=True)
     print(f"{args.device} {build} {url}", flush=True)
     hashes = extract_partitions(url, args.device, build, work)
     kernel = unpack_kernel((work / "boot.img").read_bytes())
     identity = kernel_identity(kernel)
     (work / "Image").write_bytes(kernel)
-    if args.diagnostic_tag:
-        tag = re.fullmatch(r"android16-6\.12-(\d{4}-\d{2})_r\d+", args.diagnostic_tag)
-        if not tag:
-            raise ValueError("Expected an android16-6.12-YYYY-MM_rN diagnostic tag")
-        manifest_line = tag[1]
-        pins = {}
-    else:
-        pins = download_manifest(identity["kernel_build"], identity["common"], output / "manifest.xml")
-        manifest_line = "sp"
+    stock_modules(work, output)
+    sources = resolve_sources(identity, output / "stock-gki-cert.pem", work, output)
+    metadata = json.loads((work / "metadata_info.json").read_text())["properties"]
+    patch = datetime.date.fromisoformat(metadata["post-security-patch-level"])
     profile = dict(device=args.device, build=build, ota_url=url, ota_sha256=ota_hash,
-                   partitions=hashes, revisions=pins, **identity)
+                   security_patch=patch.isoformat(), partitions=hashes, **sources, **identity)
     (output / "profile.json").write_text(json.dumps(profile, indent=2) + "\n")
     if args.github_output:
         with args.github_output.open("a") as out:
-            for name, value in dict(build=build, sub_level=identity["sub_level"],
-                                    manifest_line=manifest_line).items():
-                print(f"{name}={value}", file=out)
+            print(f"target={args.device}-{build}", file=out)
+            print(f"sub_level={identity['sub_level']}", file=out)
+            print(f"patch_month={patch:%Y-%m}", file=out)
     print(f"Stock kernel: {identity['release']} ({identity['timestamp']})")
 
 

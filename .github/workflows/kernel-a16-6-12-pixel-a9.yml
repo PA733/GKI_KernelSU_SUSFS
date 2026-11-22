@@ -1,4 +1,4 @@
-name: Pixel 11 A9 production-compatible GKI
+name: Pixel 11 GKI from stock OTA
 
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
@@ -10,6 +10,19 @@ permissions:
 on:
   workflow_dispatch:
     inputs:
+      device:
+        description: Pixel 设备型号
+        type: choice
+        default: Pixel 11 Pro XL / kodiak
+        options:
+          - Pixel 11 / cubs
+          - Pixel 11 Pro / grizzly
+          - Pixel 11 Pro XL / kodiak
+          - Pixel 11 Pro Fold / yogi
+      firmware_build:
+        description: "固件 Build ID（留空使用最新全球稳定版，地区版本请填写完整 ID）"
+        type: string
+        default: ""
       clean_build:
         description: "Clean diagnostic build (recommended for the first test)"
         required: false
@@ -45,16 +58,6 @@ on:
         required: false
         type: boolean
         default: true
-      pin_production_snapshot:
-        description: "Pin exact A9 production snapshot; disable for public KMI-generation experiment"
-        required: false
-        type: boolean
-        default: true
-      public_kmi_tag:
-        description: "Public kernel/common tag when production pin is disabled"
-        required: false
-        type: string
-        default: "android16-6.12-2026-03_r52"
       inject_stock_gki_cert:
         description: "Inject Pixel A9 stock GKI certificate into trusted keys"
         required: false
@@ -62,21 +65,55 @@ on:
         default: true
 
 jobs:
+  firmware:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    outputs:
+      target: ${{ steps.stock.outputs.target }}
+      sub_level: ${{ steps.stock.outputs.sub_level }}
+      patch_month: ${{ steps.stock.outputs.patch_month }}
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+      - name: Install OTA extraction tools
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y erofs-utils e2fsprogs lz4 zstd python3-pyelftools
+          go install github.com/xishang0128/payload-dumper-go/cmd/payload-dumper@v0.1.6
+          echo "$(go env GOPATH)/bin" >> "$GITHUB_PATH"
+      - name: Read stock kernel and module baselines
+        id: stock
+        env:
+          MODEL: ${{ inputs.device }}
+          FIRMWARE_BUILD: ${{ inputs.firmware_build }}
+        run: |
+          /usr/bin/python3 scripts/pixel_ota.py "${MODEL##* }" --build "$FIRMWARE_BUILD" \
+            --work "$RUNNER_TEMP/firmware" --output stock-profile --github-output "$GITHUB_OUTPUT"
+          jq -r '"Device: \(.device) · Firmware: \(.build) · Kernel: \(.release) · Sources: \(.source)"' \
+            stock-profile/profile.json >> "$GITHUB_STEP_SUMMARY"
+      - uses: actions/upload-artifact@v6
+        with:
+          name: pixel-stock-${{ steps.stock.outputs.target }}
+          path: stock-profile/
+          if-no-files-found: error
   pixel-a9:
-    name: "6.12.69-Pixel-A9-${{ inputs.clean_build && 'Clean' || 'ReSukiSU' }}"
+    needs: firmware
+    name: "${{ needs.firmware.outputs.target }}-${{ inputs.clean_build && 'Clean' || 'ReSukiSU' }}"
     uses: ./.github/workflows/build.yml
     secrets: inherit
     with:
       android_version: android16
       kernel_version: "6.12"
-      sub_level: "69"
-      os_patch_level: "2026-03"
-      revision: "pixel-a9"
+      sub_level: ${{ needs.firmware.outputs.sub_level }}
+      os_patch_level: ${{ needs.firmware.outputs.patch_month }}
+      revision: ${{ needs.firmware.outputs.target }}
+      pixel_profile: pixel-stock-${{ needs.firmware.outputs.target }}
       clean_build: ${{ inputs.clean_build }}
       ksu_variant: ${{ inputs.clean_build && 'Clean' || 'ReSukiSU' }}
       ksu_branch: ${{ inputs.kernelsu_branch }}
       version: ""
-      build_time: "Fri Jul 10 21:44:24 UTC 2026"
       use_zram: ${{ inputs.use_zram }}
       use_bbg: ${{ inputs.use_bbg }}
       use_rekernel: ${{ inputs.use_rekernel }}
@@ -89,6 +126,4 @@ jobs:
       image_only_compat: false
       build_matching_system_dlkm: false
       pixel_a9_compat: true
-      pixel_a9_pin_production_snapshot: ${{ inputs.pin_production_snapshot }}
-      pixel_a9_public_tag: ${{ inputs.public_kmi_tag }}
       pixel_a9_inject_stock_cert: ${{ inputs.inject_stock_gki_cert }}

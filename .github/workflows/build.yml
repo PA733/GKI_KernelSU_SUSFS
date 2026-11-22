@@ -105,16 +105,10 @@ on:
         required: false
         type: boolean
         default: false
-      pixel_a9_pin_production_snapshot:
-        description: "Pin the exact Pixel A9 production superproject snapshot"
-        required: false
-        type: boolean
-        default: true
-      pixel_a9_public_tag:
-        description: "Public kernel/common tag used when the production snapshot pin is disabled"
+      pixel_profile:
+        description: "Stock OTA profile artifact from this workflow run"
         required: false
         type: string
-        default: ""
       pixel_a9_inject_stock_cert:
         description: "Trust the Pixel A9 stock GKI certificate for protected stock modules"
         required: false
@@ -193,6 +187,18 @@ jobs:
       # ==================== 检出仓库代码 ====================
       - name: 检出代码仓库
         uses: actions/checkout@v6
+
+      - name: Load Pixel stock OTA profile
+        if: inputs.pixel_a9_compat
+        uses: actions/download-artifact@v8
+        with:
+          name: ${{ inputs.pixel_profile }}
+          path: ${{ runner.temp }}/pixel-stock
+      - name: Read Pixel kernel identity
+        if: inputs.pixel_a9_compat
+        run: |
+          profile="$RUNNER_TEMP/pixel-stock/profile.json"
+          jq -er '"BUILD_NUMBER=\(.kernel_build)\nPIXEL_RELEASE=\(.release)\nPIXEL_TIMESTAMP=\(.timestamp)\nPIXEL_KMI=\(.kmi)"' "$profile" >> "$GITHUB_ENV"
 
       # ==================== 初始化构建环境 ====================
       # 设置各种路径变量，包括内核源码、补丁、工具等目录
@@ -380,22 +386,30 @@ jobs:
       - name: 初始化并同步内核源码
         working-directory: ${{ env.KERNEL_ROOT }}
         run: |
+          if [[ "${{ inputs.pixel_a9_compat }}" == true ]]; then
+            # Keep repo's AOSP remote as the base for relative manifest fetch URLs.
+            "$REPO" init --depth=1 -u https://android.googlesource.com/kernel/manifest -b common-android16-6.12-sp --repo-rev=v2.16
+            cp "$RUNNER_TEMP/pixel-stock/manifest.xml" .repo/manifests/pixel-stock.xml
+            "$REPO" init -m pixel-stock.xml --depth=1 --repo-rev=v2.16
+            "$REPO" sync -c -d -j"$(nproc)" --no-tags --fail-fast
+            "$REPO" manifest -r -o "$RUNNER_TEMP/pixel-checkout.xml"
+            PYTHONPATH="$GITHUB_WORKSPACE/scripts" python3 - "$RUNNER_TEMP" <<'PYTHON'
+          import json, sys
+          from pathlib import Path
+          from pixel_ota import validate_manifest
+          tmp = Path(sys.argv[1])
+          profile = json.loads((tmp / "pixel-stock/profile.json").read_text())
+          pins = validate_manifest((tmp / "pixel-checkout.xml").read_bytes(), profile["common"])
+          if pins != profile["revisions"]:
+              raise SystemExit("Checked-out repo revisions differ from the selected OTA manifest")
+          PYTHON
+            exit 0
+          fi
+
           # 克隆 GCC 工具链 (用于 5.x 内核)
           git clone https://github.com/LineageOS/android_prebuilts_gcc_linux-x86_aarch64_aarch64-linux-gnu-6.4.1.git gcc
 
           FORMATTED_BRANCH="${{ inputs.android_version }}-${{ inputs.kernel_version }}-${{ inputs.os_patch_level }}"
-          if [ "${{ inputs.pixel_a9_compat }}" = "true" ]; then
-            if [ "${{ inputs.android_version }}" != "android16" ] || [ "${{ inputs.kernel_version }}" != "6.12" ] || [ "${{ inputs.sub_level }}" != "69" ]; then
-              echo "::error::Pixel A9 compatibility mode requires android16 / 6.12.69"
-              exit 1
-            fi
-            if [ "${{ inputs.pixel_a9_pin_production_snapshot }}" = "true" ]; then
-              # The production snapshot was published through the Android 16 / 6.12 superproject line.
-              FORMATTED_BRANCH="android16-6.12-sp"
-            else
-              echo "Pixel A9 diagnostic mode: production snapshot pin disabled; using public ${FORMATTED_BRANCH} manifest"
-            fi
-          fi
           echo "初始化 repo，分支: common-${FORMATTED_BRANCH}"
 
           $REPO init --depth=1 -u https://android.googlesource.com/kernel/manifest -b common-${FORMATTED_BRANCH} --repo-rev=v2.16
@@ -412,107 +426,14 @@ jobs:
           $REPO --trace sync -c -j$(nproc --all) --no-tags --fail-fast
           echo "REMOTE_BRANCH=$REMOTE_BRANCH" >> $GITHUB_ENV
 
-      # ==================== Pixel 11 A9 production snapshot ====================
-      - name: Pin Pixel A9 production snapshot
-        if: inputs.pixel_a9_compat && inputs.pixel_a9_pin_production_snapshot
+      - name: Verify source version against the Pixel OTA
+        if: inputs.pixel_a9_compat
         working-directory: ${{ env.KERNEL_ROOT }}
-        shell: bash
+        env:
+          SUB_LEVEL: ${{ inputs.sub_level }}
         run: |
-          set -euo pipefail
-
-          PIXEL_SUPERPROJECT="4a7bd11c2ad64ccbd19648297a4fb796e55e4b33"
-          PIXEL_COMMON="70777328ed0e10fa245998c8c719264bbfb78590"
-          PIXEL_BUILD="a71b075c1d43d226779d2e834433e7a1d1885beb"
-          PIXEL_CLANG="77c95e8253c2c82ffd4fee92c0ad9f5ac1e8ca04"
-          PIXEL_RUST="5c78b1e636b2bf68d46a6980437590fddca64147"
-
-          SUPER_DIR="$RUNNER_TEMP/pixel-a9-superproject"
-          rm -rf "$SUPER_DIR"
-          git init -q "$SUPER_DIR"
-          git -C "$SUPER_DIR" fetch -q https://android.googlesource.com/kernel/superproject "$PIXEL_SUPERPROJECT"
-          git -C "$SUPER_DIR" checkout -q --detach FETCH_HEAD
-
-          # Apply every gitlink from the exact production superproject snapshot to
-          # the repo-synced checkout. This pins build tools and common modules too,
-          # instead of mixing the stock common SHA with today's dependencies.
-          while read -r mode type sha path; do
-            [ "$mode" = "160000" ] || continue
-            if ! git -C "$path" rev-parse --git-dir >/dev/null 2>&1; then
-              echo "Skipping superproject path not present in this manifest: $path"
-              continue
-            fi
-            remote="$(git -C "$path" remote | head -n1)"
-            if [ -z "$remote" ]; then
-              echo "::error::No remote found for superproject path: $path"
-              exit 1
-            fi
-            echo "Pinning $path -> $sha"
-            git -C "$path" fetch -q "$remote" "$sha"
-            git -C "$path" checkout -q --detach "$sha"
-          done < <(git -C "$SUPER_DIR" ls-tree -r "$PIXEL_SUPERPROJECT")
-
-          assert_rev() {
-            local path="$1" expected="$2" actual
-            actual="$(git -C "$path" rev-parse HEAD)"
-            echo "$path = $actual"
-            if [ "$actual" != "$expected" ]; then
-              echo "::error::$path revision mismatch; expected $expected"
-              exit 1
-            fi
-          }
-
-          assert_rev common "$PIXEL_COMMON"
-          assert_rev build/kernel "$PIXEL_BUILD"
-          assert_rev prebuilts/clang/host/linux-x86 "$PIXEL_CLANG"
-          assert_rev prebuilts/rust "$PIXEL_RUST"
-
-          grep -q '^SUBLEVEL = 69$' common/Makefile || { echo "::error::Pixel A9 common is not 6.12.69"; exit 1; }
-          grep -q '^KMI_GENERATION=6$' common/build.config.constants || { echo "::error::Pixel A9 common is not KMI generation 6"; exit 1; }
-          grep -q '^CLANG_VERSION=r536225$' common/build.config.constants || { echo "::error::Pixel A9 common does not use r536225"; exit 1; }
-
-          {
-            echo "PIXEL_A9_SUPERPROJECT=$PIXEL_SUPERPROJECT"
-            echo "PIXEL_A9_COMMON=$PIXEL_COMMON"
-            echo "BUILD_NUMBER=16108597"
-          } >> "$GITHUB_ENV"
-
-      # ==================== Pixel A9 public KMI diagnostic tag ====================
-      - name: Checkout Pixel A9 public KMI diagnostic tag
-        if: inputs.pixel_a9_compat && !inputs.pixel_a9_pin_production_snapshot
-        working-directory: ${{ env.KERNEL_ROOT }}
-        shell: bash
-        run: |
-          set -euo pipefail
-          TAG="${{ inputs.pixel_a9_public_tag }}"
-          if [ -z "$TAG" ]; then
-            echo "::error::pixel_a9_public_tag is required when the production snapshot pin is disabled"
-            exit 1
-          fi
-
-          echo "Checking out public kernel/common tag: $TAG"
-          # repo sync configures kernel/common with the AOSP remote named "aosp".
-          # Reuse that existing repo-managed remote rather than assuming "origin".
-          git -C common fetch -q aosp "refs/tags/$TAG:refs/tags/$TAG"
-          git -C common checkout -q --detach "refs/tags/$TAG"
-          ACTUAL_COMMON="$(git -C common rev-parse HEAD)"
-          echo "Public tag common SHA: $ACTUAL_COMMON"
-
-          if [ "$TAG" = "android16-6.12-2026-03_r52" ]; then
-            EXPECTED_R52="2180dbfe30b8629e6fb80a5957b32630b9a51c7b"
-            [ "$ACTUAL_COMMON" = "$EXPECTED_R52" ] || {
-              echo "::error::r52 SHA mismatch; expected $EXPECTED_R52"
-              exit 1
-            }
-          fi
-
-          grep -q '^SUBLEVEL = 69$' common/Makefile || { echo "::error::Public diagnostic tag is not Linux 6.12.69"; exit 1; }
-          grep -q '^KMI_GENERATION=6$' common/build.config.constants || { echo "::error::Public diagnostic tag is not KMI generation 6"; exit 1; }
-          grep -q '^CLANG_VERSION=r536225$' common/build.config.constants || { echo "::error::Public diagnostic tag does not use r536225"; exit 1; }
-
-          {
-            echo "PIXEL_A9_PUBLIC_TAG=$TAG"
-            echo "PIXEL_A9_PUBLIC_COMMON=$ACTUAL_COMMON"
-          } >> "$GITHUB_ENV"
+          grep -Fx "SUBLEVEL = $SUB_LEVEL" common/Makefile
+          grep -Fx "KMI_GENERATION=$PIXEL_KMI" common/build.config.constants
 
       # ==================== 检测 AOSP KMI Generation ====================
       # Android 16 / 6.12 的 KMI generation 由实际同步的 AOSP 源码决定，
@@ -1026,7 +947,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          CERT_SRC="$GITHUB_WORKSPACE/.github/pixel-a9/stock-gki-cert.pem"
+          CERT_SRC="$RUNNER_TEMP/pixel-stock/stock-gki-cert.pem"
           CERT_DST="$KERNEL_ROOT/common/certs/pixel_a9_stock_gki_cert.pem"
           TRUSTED_KEYS=""
           if [ "${{ inputs.pixel_a9_inject_stock_cert }}" = "true" ]; then
@@ -1050,9 +971,6 @@ jobs:
           if [ "${{ inputs.pixel_a9_inject_stock_cert }}" = "true" ]; then
             fingerprint="$(openssl x509 -in "$CERT_SRC" -noout -fingerprint -sha256 | cut -d= -f2)"
             echo "Pixel A9 stock GKI cert SHA256: $fingerprint"
-            [ "$fingerprint" = "58:9B:05:30:41:D8:6A:09:C8:60:79:DB:D0:64:8C:30:5B:E9:6B:5A:98:6D:C6:67:25:62:C2:ED:51:BC:6D:E0" ] || {
-              echo "::error::Unexpected Pixel A9 stock GKI certificate"; exit 1;
-            }
           fi
 
       - name: 集成 Droidspaces 支持
@@ -1531,10 +1449,7 @@ jobs:
         working-directory: ${{ env.KERNEL_ROOT }}
         run: |
           if [ "${{ inputs.pixel_a9_compat }}" = "true" ]; then
-            # Keep AOSP setlocalversion intact. BUILD_NUMBER plus the exact Git SHA
-            # naturally reproduce -android16-6-g5c5f2fea42dd-ab15835541-4k.
             sed -i "/stable_scmversion_cmd/s/-maybe-dirty//g" ./build/kernel/kleaf/impl/stamp.bzl
-            echo "BUILD_NUMBER=16108597" >> "$GITHUB_ENV"
             echo "Pixel A9 mode: preserving upstream setlocalversion"
             exit 0
           fi
@@ -1610,7 +1525,7 @@ jobs:
           # 读取输入：输入 N/n 或留空时，使用当前 UTC 时间
           INPUT_TIME="${{ inputs.build_time }}"
           if [ "${{ inputs.pixel_a9_compat }}" = "true" ]; then
-            DATESTR="Tue Aug 18 04:34:09 UTC 2026"
+            DATESTR="$PIXEL_TIMESTAMP"
           elif [[ -n "$INPUT_TIME" && "$INPUT_TIME" != "N" && "$INPUT_TIME" != "n" ]]; then
             DATESTR="$INPUT_TIME"
           else
@@ -1747,7 +1662,7 @@ jobs:
             exit 1
           fi
 
-          VERSION="$(strings "$IMAGE" | grep -m1 'Linux version')"
+          VERSION="$(LC_ALL=C strings "$IMAGE" | awk '/^Linux version / && !found {print; found=1}')"
           echo "$VERSION"
 
           if [ -z "${KMI_GENERATION:-}" ]; then
@@ -1767,19 +1682,13 @@ jobs:
         run: |
           set -euo pipefail
           IMAGE="$KERNEL_ROOT/bazel-bin/common/kernel_aarch64/Image"
-          EXPECTED_RELEASE="6.12.69-android16-6-g70777328ed0e-ab16108597-4k"
-          VERSION="$(strings "$IMAGE" | grep -m1 'Linux version')"
+          EXPECTED_RELEASE="$PIXEL_RELEASE"
+          VERSION="$(LC_ALL=C strings "$IMAGE" | awk '/^Linux version / && !found {print; found=1}')"
           echo "$VERSION"
-          if [ "${{ inputs.pixel_a9_pin_production_snapshot }}" = "true" ]; then
-            grep -qF "Linux version $EXPECTED_RELEASE" <<< "$VERSION" || {
-              echo "::error::Pixel A9 kernel identity mismatch; expected $EXPECTED_RELEASE"
-              exit 1
-            }
-          else
-            echo "Pixel A9 public-tag diagnostic mode: exact stock release identity check intentionally skipped"
-            echo "Diagnostic tag: ${PIXEL_A9_PUBLIC_TAG:-unknown}"
-            echo "Diagnostic common SHA: ${PIXEL_A9_PUBLIC_COMMON:-unknown}"
-          fi
+          grep -qF "Linux version $EXPECTED_RELEASE " <<< "$VERSION" || {
+            echo "::error::Pixel kernel identity mismatch; expected $EXPECTED_RELEASE"
+            exit 1
+          }
 
           FINAL_CONFIG="$RUNNER_TEMP/${CONFIG}-pixel-a9.config"
           "$KERNEL_ROOT/common/scripts/extract-ikconfig" "$IMAGE" > "$FINAL_CONFIG"
@@ -1828,14 +1737,10 @@ jobs:
               echo "::error::$module CRC mismatch for $symbol: stock=$expected build=$actual"
               mismatches=$((mismatches + 1))
             fi
-          done < "$GITHUB_WORKSPACE/.github/pixel-a9/stock-module-crcs-critical.tsv"
+          done < "$RUNNER_TEMP/pixel-stock/stock-module-crcs-critical.tsv"
           if [ "$mismatches" -ne 0 ]; then
-            if [ "${{ inputs.pixel_a9_pin_production_snapshot }}" = "true" ]; then
-              echo "::error::Pixel A9 production compatibility failed: $mismatches critical module CRC mismatch(es)"
-              exit 1
-            fi
-            echo "::warning::Pixel A9 public-tag diagnostic found $mismatches critical module CRC mismatch(es)"
-            echo "Public-tag ABI comparison completed; mismatches above are the diagnostic result, not a workflow failure."
+            echo "::error::Pixel stock module ABI check failed: $mismatches symbol mismatches"
+            exit 1
           else
             echo "Pixel A9 critical wwan/rfkill/rust_binder CRC baseline matches stock."
           fi
@@ -2031,7 +1936,7 @@ jobs:
               fi
               STAMP_FLAG=""
               if [ "${{ inputs.pixel_a9_compat }}" = "true" ]; then
-                echo "Pixel A9 mode: enabling Kleaf SCM stamping for g5c5f2fea42dd-ab15835541"
+                echo "Pixel A9 mode: enabling Kleaf SCM stamping for the selected stock build"
                 STAMP_FLAG="--config=stamp"
 
                 # Kleaf's workspace-status logic marks the SCM version dirty when
