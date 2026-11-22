@@ -48,6 +48,8 @@
 
 构建完成后，`magiskboot` 会把编译好的内核装入同一 OTA 的原厂 `boot.img`。在 Actions 的 Artifacts 下载后缀为 `-boot` 的产物，解压 `*-boot.img.gz` 即可得到完整的重打包镜像。替换内核会使原厂签名失效，使用此镜像需要解锁 bootloader。
 
+启用 `use_zram` 的非 clean 构建还会上传 `-pixel-zram-boot`。其中的 `boot.img.gz` 和 `vendor_kernel_boot.img.gz` 是同一次构建的配套镜像，解压后用于同一 slot。包内的 `pixel-lz4kd-config.zip` 用于在启动时选择 LZ4KD。
+
 ## ⚠️ 重要更新日志
 
 > **注意：** 目前不支持一加 ColorOS 14、15，刷入后可能需要清除数据开机。

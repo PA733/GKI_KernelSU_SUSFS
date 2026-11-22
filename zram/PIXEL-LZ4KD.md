@@ -8,7 +8,9 @@ Pixel 的 ZRAM 位于 `vendor_kernel_boot`，由 `zram_gs.ko` 和 `zcomp_gs_cpu.
 
 适用于本仓库 Pixel A9 固定生产快照、4 KiB 页、已解锁的设备。先保存当前系统版本的完整 `boot` 和 `vendor_kernel_boot` 分区备份，确认当前 slot。不要混用其他系统版本的镜像，也不要覆盖原始备份。
 
-触发 Pixel 工作流，设置 `clean_build=false`、`use_zram=true`。下载名称以 `-pixel-zram` 结尾的配套产物，解压为一个目录。在安装了 Python 3、`lz4` 和 `openssl` 命令的 Linux 主机上运行：
+触发 Pixel 工作流，设置 `clean_build=false`、`use_zram=true`。下载名称以 `-pixel-zram-boot` 结尾的产物，将其中的 `boot.img.gz` 和 `vendor_kernel_boot.img.gz` 解压后即可按下文安装。包内同时提供 `pixel-lz4kd-config.zip`。
+
+如需从自己的分区备份手动生成镜像，下载名称以 `-pixel-zram` 结尾的模块包并解压，在安装了 Python 3、`lz4` 和 `openssl` 命令的 Linux 主机上运行：
 
 ```sh
 python3 prepare_pixel_zram.py \

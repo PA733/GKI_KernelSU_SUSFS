@@ -39,7 +39,7 @@ on:
         type: boolean
         default: false
       use_zram:
-        description: "构建 LZ4KD 模块（须配套更新 vendor_kernel_boot，4 KiB 页）"
+        description: "构建 LZ4KD 模块及配套 boot、vendor_kernel_boot 镜像（非 clean 构建）"
         required: true
         type: boolean
         default: false
@@ -90,8 +90,9 @@ jobs:
           FIRMWARE_BUILD: ${{ inputs.firmware_build }}
         run: |
           /usr/bin/python3 scripts/pixel_ota.py "${MODEL##* }" --build "$FIRMWARE_BUILD" \
+            ${{ !inputs.clean_build && inputs.use_zram && '--include-vendor-kernel-boot' || '' }} \
             --work "$RUNNER_TEMP/firmware" --output stock-profile --github-output "$GITHUB_OUTPUT"
-          mv "$RUNNER_TEMP/firmware/boot.img" stock-profile/boot.img
+          mv "$RUNNER_TEMP"/firmware/*boot.img stock-profile/
           jq -r '"Device: \(.device) · Firmware: \(.build) · Kernel: \(.release) · Sources: \(.source)"' \
             stock-profile/profile.json >> "$GITHUB_STEP_SUMMARY"
       - uses: actions/upload-artifact@v6
