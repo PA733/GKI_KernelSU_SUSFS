@@ -98,14 +98,18 @@ def resolve_ota(device, requested):
 
 
 def extract_partitions(url, device, build, work):
-    def dumper_json(*args):
-        return json.loads(subprocess.check_output(["payload-dumper", *args, url, "--json"]))
-    metadata = dumper_json("metadata")["properties"]
+    work.mkdir(parents=True, exist_ok=True)
+    def dumper_json(command, filename, *args):
+        # v0.1.6 prints a timing line even in metadata --json mode.
+        subprocess.run(["payload-dumper", command, url, "--json", "--save", "-o", str(work), *args],
+                       stdout=subprocess.DEVNULL, check=True)
+        return json.loads((work / filename).read_text())
+    metadata = dumper_json("metadata", "metadata_info.json")["properties"]
     if (device not in metadata.get("pre-device", "").split("|") or
             not any(f"/{build}/" in item for item in metadata.get("post-build", "").split("|"))):
         raise ValueError("OTA metadata disagrees with the selected device/build")
     names = "boot,system_dlkm"
-    partitions = dumper_json("list", "-p", names)
+    partitions = dumper_json("list", "partitions_info.json", "-p", names)
     subprocess.run(["payload-dumper", "extract", url, "-p", names, "-o", str(work)], check=True)
     hashes = {}
     for name in names.split(","):
